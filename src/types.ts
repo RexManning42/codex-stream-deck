@@ -1,4 +1,5 @@
 export type AgentVisualStatus = "empty" | "idle" | "thinking" | "complete" | "input" | "error";
+export type ThemeMode = "light" | "dark";
 
 export type MicroAgentSlot = {
   id: number;
@@ -23,4 +24,5 @@ export type MicroSnapshot = {
   layout: MicroLayout;
   agentSource: "pinned" | "recent" | "priority" | "custom";
   lightingAutoOff: string;
+  theme: ThemeMode;
 };

@@ -25,7 +25,9 @@ Example destination names:
 %LOCALAPPDATA%\CodexDeck\icons\MIND+.svg
 ```
 
-The plugin reads a matching file only when Codex reports that keycap ID for one of the six physical action slots. Fixed page-two actions can be given an icon manually in the Stream Deck editor.
+The plugin reads matching files for the six synchronized physical action slots
+and for the standalone keycap actions. If a file is unavailable, the key still
+receives a readable themed label instead of remaining blank.
 
 ## Prompt Codex to copy the files locally
 

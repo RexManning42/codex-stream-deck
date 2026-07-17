@@ -3,10 +3,20 @@ import { readFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { CodexMicroRendererBridge } from "./codex-micro-renderer-bridge.js";
-import { renderAgentKey, renderImportedKeycap } from "./render.js";
+import type { OfficialKeycapId } from "./keycaps.js";
+import { renderAgentKey, renderBuiltinKeycap, renderFallbackKeycap, renderImportedKeycap, type BuiltinIconName } from "./render.js";
 import { openCodexThread } from "./windows-open.js";
 import { visualStatusFromMicro } from "./status.js";
 import type { MicroActionSlot, MicroDirection, MicroSnapshot, ReasoningAdjustment } from "./types.js";
+
+export type FixedIconSource =
+  | { kind: "local"; keycapId: string }
+  | { kind: "builtin"; name: BuiltinIconName };
+
+type FixedIconRegistration = { action: KeyAction; source: FixedIconSource };
+type AgentRegistration = { action: KeyAction; slot: number };
+type MicroActionRegistration = { action: KeyAction; slot: MicroActionSlot };
+type ActionIdentity = { id: string };
 
 const USER_ICON_ROOT = join(
   process.env.LOCALAPPDATA ?? join(homedir(), "AppData", "Local"),
@@ -16,11 +26,14 @@ const USER_ICON_ROOT = join(
 
 export class DeckController {
   private readonly microBridge = new CodexMicroRendererBridge((message) => streamDeck.logger.info(message));
-  private readonly agents = new Map<number, KeyAction>();
-  private readonly microActions = new Map<MicroActionSlot, KeyAction>();
+  private readonly agents = new Map<string, AgentRegistration>();
+  private readonly microActions = new Map<string, MicroActionRegistration>();
+  private readonly fixedActions = new Map<string, FixedIconRegistration>();
   private readonly keycapImages = new Map<string, Promise<string | null>>();
+  private readonly lastImages = new Map<string, string>();
   private poll?: NodeJS.Timeout;
   private animation?: NodeJS.Timeout;
+  private stopped = false;
   private animationFrame = 0;
   private snapshot?: MicroSnapshot;
   private lastError = "";
@@ -29,36 +42,44 @@ export class DeckController {
   private lastLayoutSignature = "";
 
   async start(): Promise<void> {
+    this.stopped = false;
     await this.refresh();
-    this.poll = setInterval(() => void this.refresh(), 1_200);
-    this.animation = setInterval(() => {
-      this.animationFrame = (this.animationFrame + 1) % 12;
-      void this.renderAnimatedAgents();
-    }, 200);
+    this.scheduleRefresh();
+    this.scheduleAnimation();
   }
 
   stop(): void {
+    this.stopped = true;
     if (this.poll) clearInterval(this.poll);
     if (this.animation) clearInterval(this.animation);
     this.microBridge.close();
   }
 
   registerAgent(slot: number, action: KeyAction): void {
-    this.agents.set(slot, action);
-    void this.renderAgent(slot);
+    this.agents.set(action.id, { action, slot });
+    void this.renderAgent({ action, slot });
   }
 
-  unregisterAgent(slot: number): void {
-    this.agents.delete(slot);
+  unregisterAgent(action: ActionIdentity): void {
+    this.unregister(action, this.agents);
   }
 
   registerMicroAction(slot: MicroActionSlot, action: KeyAction): void {
-    this.microActions.set(slot, action);
-    void this.renderMicroAction(slot);
+    this.microActions.set(action.id, { action, slot });
+    void this.renderMicroAction({ action, slot });
   }
 
-  unregisterMicroAction(slot: MicroActionSlot): void {
-    this.microActions.delete(slot);
+  unregisterMicroAction(action: ActionIdentity): void {
+    this.unregister(action, this.microActions);
+  }
+
+  registerFixedAction(id: string, action: KeyAction, source: FixedIconSource): void {
+    this.fixedActions.set(action.id, { action, source });
+    void this.renderFixedAction({ action, source });
+  }
+
+  unregisterFixedAction(action: ActionIdentity): void {
+    this.unregister(action, this.fixedActions);
   }
 
   async sendAgent(slot: number, act: 0 | 1): Promise<void> {
@@ -79,6 +100,10 @@ export class DeckController {
 
   async adjustReasoning(direction: ReasoningAdjustment): Promise<void> {
     await this.microBridge.adjustReasoning(direction);
+  }
+
+  async runKeycap(keycapId: OfficialKeycapId): Promise<void> {
+    await this.microBridge.runKeycap(keycapId);
   }
 
   async createTask(): Promise<void> {
@@ -103,11 +128,11 @@ export class DeckController {
         streamDeck.logger.info(`Codex Micro states: ${snapshot.slots.map((slot) => `${slot.id + 1}=${slot.status}`).join(" ")}`);
       }
 
-      const layout = JSON.stringify(snapshot.layout.slots);
+      const layout = JSON.stringify({ theme: snapshot.theme, slots: snapshot.layout.slots });
       if (layout !== this.lastLayoutSignature) {
         this.lastLayoutSignature = layout;
         this.keycapImages.clear();
-        streamDeck.logger.info(`Codex Micro layout synchronized (${snapshot.agentSource}).`);
+        streamDeck.logger.info(`Codex Micro layout synchronized (${snapshot.agentSource}, ${snapshot.theme} theme).`);
       }
 
       await this.renderAll();
@@ -118,55 +143,89 @@ export class DeckController {
         this.lastError = message;
         streamDeck.logger.warn(`Codex Micro bridge unavailable: ${message}`);
       }
-      await Promise.all([...this.agents.keys()].map((slot) => this.renderAgent(slot)));
+      await Promise.all([...this.agents.values()].map((registration) => this.renderAgent(registration)));
     }
   }
 
   private async renderAll(): Promise<void> {
     await Promise.all([
-      ...[...this.agents.keys()].map((slot) => this.renderAgent(slot)),
-      ...[...this.microActions.keys()].map((slot) => this.renderMicroAction(slot))
+      ...[...this.agents.values()].map((registration) => this.renderAgent(registration)),
+      ...[...this.microActions.values()].map((registration) => this.renderMicroAction(registration)),
+      ...[...this.fixedActions.values()].map((registration) => this.renderFixedAction(registration))
     ]);
   }
 
-  private async renderAgent(slot: number): Promise<void> {
-    const action = this.agents.get(slot);
-    if (!action) return;
+  private async renderAgent({ action, slot }: AgentRegistration): Promise<void> {
     const agent = this.snapshot?.slots.find((item) => item.id === slot);
     const title = agent?.title ?? (this.snapshot ? "Not assigned" : "Bridge offline");
     const status = agent ? visualStatusFromMicro(agent.status) : "empty";
-    await action.setImage(renderAgentKey(slot, title, status, agent?.selected ?? false, this.animationFrame));
-    await action.setTitle("");
+    const theme = this.snapshot?.theme ?? "dark";
+    await this.setImage(action, renderAgentKey(slot, title, status, agent?.selected ?? false, this.animationFrame, theme));
   }
 
   private async renderAnimatedAgents(): Promise<void> {
-    const slots = [...this.agents.keys()].filter((slot) => {
+    const registrations = [...this.agents.values()].filter(({ slot }) => {
       const agent = this.snapshot?.slots.find((item) => item.id === slot);
-      return agent?.status === "working" || agent?.status === "approval" || agent?.selected;
+      if (!agent) return false;
+      const status = visualStatusFromMicro(agent.status);
+      return status === "thinking" || status === "input";
     });
-    await Promise.all(slots.map((slot) => this.renderAgent(slot).catch((error) =>
-      streamDeck.logger.error(`Agent animation ${slot + 1} failed: ${String(error)}`)
+    await Promise.all(registrations.map((registration) => this.renderAgent(registration).catch((error) =>
+      streamDeck.logger.error(`Agent animation ${registration.slot + 1} failed: ${String(error)}`)
     )));
   }
 
-  private async renderMicroAction(slot: MicroActionSlot): Promise<void> {
-    const action = this.microActions.get(slot);
+  private async renderMicroAction({ action, slot }: MicroActionRegistration): Promise<void> {
     const keycapId = this.snapshot?.layout.slots[slot]?.keycapId;
-    if (!action || !keycapId) return;
-    const image = await this.keycapImage(keycapId);
-    if (image) {
-      await action.setImage(image);
-      await action.setTitle("");
-    }
+    if (!keycapId) return;
+    const image = await this.keycapImage(keycapId, this.snapshot?.theme ?? "dark");
+    if (image) await this.setImage(action, image);
   }
 
-  private keycapImage(keycapId: string): Promise<string | null> {
-    let pending = this.keycapImages.get(keycapId);
+  private async renderFixedAction(registration: FixedIconRegistration): Promise<void> {
+    const theme = this.snapshot?.theme ?? "dark";
+    const image = registration.source.kind === "builtin"
+      ? renderBuiltinKeycap(registration.source.name, theme)
+      : await this.keycapImage(registration.source.keycapId, theme);
+    if (image) await this.setImage(registration.action, image);
+  }
+
+  private async setImage(action: KeyAction, image: string): Promise<void> {
+    if (this.lastImages.get(action.id) === image) return;
+    await Promise.all([action.setImage(image), action.setTitle("")]);
+    this.lastImages.set(action.id, image);
+  }
+
+  private unregister<T>(action: ActionIdentity, registrations: Map<string, T>): void {
+    registrations.delete(action.id);
+    this.lastImages.delete(action.id);
+  }
+
+  private scheduleRefresh(): void {
+    if (this.stopped) return;
+    this.poll = setTimeout(async () => {
+      try { await this.refresh(); }
+      finally { this.scheduleRefresh(); }
+    }, 1_200);
+  }
+
+  private scheduleAnimation(): void {
+    if (this.stopped) return;
+    this.animation = setTimeout(async () => {
+      this.animationFrame = (this.animationFrame + 1) % 12;
+      try { await this.renderAnimatedAgents(); }
+      finally { this.scheduleAnimation(); }
+    }, 200);
+  }
+
+  private keycapImage(keycapId: string, theme: "light" | "dark"): Promise<string | null> {
+    const cacheKey = `${theme}:${keycapId}`;
+    let pending = this.keycapImages.get(cacheKey);
     if (pending) return pending;
     pending = readFile(join(USER_ICON_ROOT, `${keycapId}.svg`), "utf8")
-      .then((svg) => renderImportedKeycap(svg))
-      .catch(() => null);
-    this.keycapImages.set(keycapId, pending);
+      .then((svg) => renderImportedKeycap(svg, theme))
+      .catch(() => renderFallbackKeycap(keycapId, theme));
+    this.keycapImages.set(cacheKey, pending);
     return pending;
   }
 }

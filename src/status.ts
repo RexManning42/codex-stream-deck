@@ -5,7 +5,10 @@ export function visualStatusFromMicro(status: string): AgentVisualStatus {
     case "off": return "empty";
     case "working": return "thinking";
     case "unread": return "complete";
-    case "approval": return "input";
+    case "approval":
+    case "awaiting-approval":
+    case "awaiting-response":
+      return "input";
     case "error": return "error";
     default: return "idle";
   }

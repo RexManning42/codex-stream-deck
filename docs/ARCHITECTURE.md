@@ -4,7 +4,7 @@
 
 ### Launcher
 
-`Start-CodexDeck.ps1` finds the installed Microsoft Store Codex package, closes its current processes, chooses an unused loopback port, writes the port number to `%LOCALAPPDATA%\CodexDeck\codex-micro-bridge.json`, and starts `ChatGPT.exe` with:
+`Start-CodexDeck.ps1` finds the installed Microsoft Store Codex package. If a healthy debug-enabled Codex process already exists, it reuses its loopback port. Otherwise it closes the normal Codex processes, chooses an unused loopback port, writes the port number to `%LOCALAPPDATA%\CodexDeck\codex-micro-bridge.json`, and starts `ChatGPT.exe` with:
 
 ```text
 --remote-debugging-address=127.0.0.1
@@ -23,7 +23,8 @@ The plugin discovers the loopback port from the state file or from the command l
 2. announce a connected Micro device state;
 3. read the native six-slot state, layout, agent source, and lighting preference;
 4. dispatch Micro HID and joystick events;
-5. invoke the internal reasoning-effort commands.
+5. invoke the internal reasoning-effort commands;
+6. resolve standalone keycap actions from Codex's live Micro keycap registry.
 
 The bridge does not emulate a USB HID device and installs no driver.
 
@@ -40,7 +41,13 @@ Agent keys are original deterministic SVGs generated in memory from task title a
 | `approval` | orange pause/input |
 | `error` | red error |
 
+The renderer derives the active Codex appearance from explicit theme tokens when available and falls back to the computed renderer surface luminance. Dark mode uses layered charcoal surfaces rather than pure black, with off-white text and slightly lifted status colors for the Stream Deck display.
+
 Official Codex Micro keycap SVG contents are not part of the source or release. Optional user-local files are loaded from `%LOCALAPPDATA%\CodexDeck\icons` and wrapped in the project's neutral key surface at runtime.
+
+The controller uses non-overlapping self-scheduled refreshes and caches the last
+image sent to each action instance. Unchanged keys therefore produce no repeated
+USB image writes. Animated frames are limited to working and approval states.
 
 ## Trust boundary
 

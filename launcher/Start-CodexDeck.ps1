@@ -1,6 +1,48 @@
-param([switch]$DryRun)
+param(
+  [switch]$DryRun,
+  [switch]$ForceRestart,
+  [switch]$InstallStartup,
+  [switch]$UninstallStartup
+)
 
 $ErrorActionPreference = 'Stop'
+
+if ($InstallStartup -and $UninstallStartup) {
+  throw 'Use either -InstallStartup or -UninstallStartup, not both.'
+}
+
+function Get-StartupShortcutPath {
+  Join-Path ([Environment]::GetFolderPath('Startup')) 'Codex Deck.lnk'
+}
+
+function Set-StartupShortcut {
+  $shortcutPath = Get-StartupShortcutPath
+  $shell = New-Object -ComObject WScript.Shell
+  $shortcut = $shell.CreateShortcut($shortcutPath)
+  $shortcut.TargetPath = (Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe')
+  $shortcut.Arguments = "-NoLogo -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$PSCommandPath`""
+  $shortcut.WorkingDirectory = $PSScriptRoot
+  $shortcut.Description = 'Start Codex Deck bridge at Windows sign-in'
+  $shortcut.IconLocation = "$env:SystemRoot\System32\shell32.dll,44"
+  $shortcut.Save()
+  Write-Host "Startup shortcut installed: $shortcutPath"
+}
+
+if ($InstallStartup) {
+  Set-StartupShortcut
+  exit 0
+}
+
+if ($UninstallStartup) {
+  $shortcutPath = Get-StartupShortcutPath
+  if (Test-Path -LiteralPath $shortcutPath) {
+    Remove-Item -LiteralPath $shortcutPath -Force
+    Write-Host "Startup shortcut removed: $shortcutPath"
+  } else {
+    Write-Host 'No Codex Deck startup shortcut was installed.'
+  }
+  exit 0
+}
 
 function Get-CodexInstallation {
   $package = Get-AppxPackage -Name 'OpenAI.Codex' -ErrorAction SilentlyContinue |
@@ -23,21 +65,42 @@ function Get-CodexProcesses([string]$AppRoot) {
   })
 }
 
+function Get-HealthyDebugPort($Processes) {
+  foreach ($process in $Processes) {
+    if ([string]::IsNullOrWhiteSpace($process.CommandLine)) { continue }
+    if ($process.CommandLine -match '--remote-debugging-port=(\d+)') {
+      $candidate = [int]$Matches[1]
+      try {
+        $response = Invoke-WebRequest -UseBasicParsing -Uri "http://127.0.0.1:$candidate/json/version" -TimeoutSec 1
+        if ($response.StatusCode -ge 200 -and $response.StatusCode -lt 300) { return $candidate }
+      }
+      catch { }
+    }
+  }
+  return $null
+}
+
 $node = Get-Command node -ErrorAction SilentlyContinue
 if ($null -eq $node) { throw 'Node.js 20 or newer is required. Install it from https://nodejs.org/ and try again.' }
 $major = [int]((& $node.Source --version).TrimStart('v').Split('.')[0])
 if ($major -lt 20) { throw "Node.js 20 or newer is required. Found: $(& $node.Source --version)" }
 
 $codex = Get-CodexInstallation
+$processes = Get-CodexProcesses $codex.Root
+$existingPort = Get-HealthyDebugPort $processes
 if ($DryRun) {
   Write-Host "Codex version: $($codex.Version)"
   Write-Host "Executable: $($codex.Executable)"
   Write-Host "Node: $(& $node.Source --version)"
+  if ($existingPort) { Write-Host "Reusable debug port: $existingPort" }
+  elseif ($processes.Count -gt 0) { Write-Host 'Codex is running without a reusable debug bridge; a restart is required.' }
+  else { Write-Host 'Codex is not running; the launcher will start it.' }
   exit 0
 }
 
-$processes = Get-CodexProcesses $codex.Root
-if ($processes.Count -gt 0) {
+$port = $existingPort
+if ($ForceRestart -or -not $port) {
+  if ($processes.Count -gt 0) {
   Write-Host "Closing $($processes.Count) Codex process(es)..."
   foreach ($process in ($processes | Sort-Object ParentProcessId -Descending)) {
     Stop-Process -Id $process.ProcessId -Force -ErrorAction SilentlyContinue
@@ -46,12 +109,24 @@ if ($processes.Count -gt 0) {
   do { Start-Sleep -Milliseconds 250; $remaining = Get-CodexProcesses $codex.Root }
   while ($remaining.Count -gt 0 -and (Get-Date) -lt $deadline)
   if ($remaining.Count -gt 0) { throw 'Some Codex background processes could not be closed.' }
+  }
+
+  $listener = [Net.Sockets.TcpListener]::new([Net.IPAddress]::Loopback, 0)
+  $listener.Start()
+  $port = ([Net.IPEndPoint]$listener.LocalEndpoint).Port
+  $listener.Stop()
 }
 
-$listener = [Net.Sockets.TcpListener]::new([Net.IPAddress]::Loopback, 0)
-$listener.Start()
-$port = ([Net.IPEndPoint]$listener.LocalEndpoint).Port
-$listener.Stop()
+if ($existingPort -and -not $ForceRestart) {
+  Write-Host "Reusing the existing Codex session on loopback port $port..."
+}
+else {
+  Write-Host "Starting Codex $($codex.Version) with a loopback-only bridge on port $port..."
+  Start-Process -FilePath $codex.Executable -ArgumentList @(
+    '--remote-debugging-address=127.0.0.1',
+    "--remote-debugging-port=$port"
+  )
+}
 
 $stateRoot = Join-Path $env:LOCALAPPDATA 'CodexDeck'
 $statePath = Join-Path $stateRoot 'codex-micro-bridge.json'
@@ -62,13 +137,15 @@ New-Item -ItemType Directory -Force -Path $stateRoot | Out-Null
   [Text.UTF8Encoding]::new($false)
 )
 
-Write-Host "Starting Codex $($codex.Version) with a loopback-only bridge on port $port..."
-Start-Process -FilePath $codex.Executable -ArgumentList @(
-  '--remote-debugging-address=127.0.0.1',
-  "--remote-debugging-port=$port"
-)
+$runtimeScript = Join-Path $PSScriptRoot 'runtime-override.mjs'
+if (-not (Test-Path -LiteralPath $runtimeScript)) {
+  $runtimeScript = Join-Path $PSScriptRoot '..\release\codex-deck-launcher\runtime-override.mjs'
+}
+if (-not (Test-Path -LiteralPath $runtimeScript)) {
+  throw 'The bundled runtime-override.mjs is missing. Run npm run build or use the extracted release launcher folder.'
+}
 
-& $node.Source (Join-Path $PSScriptRoot 'runtime-override.mjs') $port
+& $node.Source $runtimeScript $port
 if ($LASTEXITCODE -ne 0) { throw 'The Codex Micro runtime could not be enabled.' }
 
 Write-Host 'Codex Deck is ready. Keep this Codex session open while using Stream Deck.'

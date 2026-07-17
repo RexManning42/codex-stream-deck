@@ -2,6 +2,9 @@
 
 ## Codex Micro is missing from Settings
 
+- You can safely run the launcher again while a launcher-started Codex session is open; it now reuses the existing debug session instead of restarting Codex.
+- Use `Start-CodexDeck.ps1 -ForceRestart` only when you explicitly want to restart Codex.
+- To start it automatically after Windows sign-in, run `Start-CodexDeck.ps1 -InstallStartup` once. Remove that behavior with `-UninstallStartup`.
 - Close all Codex windows.
 - Start Codex with `Start Codex Deck.cmd`.
 - Keep the launcher folder intact; `runtime-override.mjs` must remain next to the PowerShell script.

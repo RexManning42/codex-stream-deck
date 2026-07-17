@@ -7,18 +7,22 @@ Codex Deck mirrors the six native agent slots, their live states, the six config
 > [!IMPORTANT]
 > This is an independent community project. It is not made, supported, or endorsed by OpenAI or Elgato. It relies on undocumented Codex desktop internals and may need an update after a Codex release.
 
-![Six public agent-tile states](docs/assets/agent-status-preview.svg)
+![Six public agent-tile states in Codex-aligned dark mode](docs/assets/agent-status-preview-dark.svg)
 
 ## What works
 
 - Six dynamic agent keys using the assignments selected in **Codex Settings > Codex Micro**.
 - Live states: idle, working, unread completion, approval/input required, error, and empty.
+- Automatic light/dark rendering that follows the active Codex appearance.
 - Native key-down and key-up events for Micro action slots `ACT06` through `ACT12`.
 - Native joystick events for up, right, down, and left.
 - Native encoder click.
 - Dedicated reasoning-effort up/down buttons with press-and-hold repeat.
 - A direct `codex://threads/new` action for starting a new task.
+- Standalone actions for all 29 official single-size keycaps, resolved from Codex's live Micro registry.
+- The official microphone keycap as a true native press/release action.
 - Optional local loading of Codex Micro keycap SVGs without redistributing those files.
+- A readable Codex-aligned fallback when a local keycap SVG is missing.
 
 There is deliberately no legacy task-database reader, log scraper, or hotkey fallback in the public runtime.
 
@@ -36,12 +40,16 @@ Other 15-key Stream Deck models may work, but have not been verified yet.
 
 1. Open the latest [GitHub release](https://github.com/dazer1234/codex-stream-deck/releases/latest).
 2. Download and double-click `com.simeo.codex-deck.streamDeckPlugin`.
-3. Download and extract `codex-deck-launcher-v0.4.1.zip`.
-4. Close Codex, then double-click **Start Codex Deck.cmd** from the extracted launcher folder.
+3. Download and extract the matching `codex-deck-launcher` ZIP.
+4. Double-click **Start Codex Deck.cmd** from the extracted launcher folder. If Codex is already running from the launcher, it reuses that session; if it was launched normally, it restarts it once with the bridge enabled.
 5. Open **Codex Settings > Codex Micro** and choose the agent source, action assignments, joystick actions, and encoder behavior you want.
 6. In Stream Deck, drag the Codex Deck actions onto your keys using the layout below.
 
-Use **Start Codex Deck.cmd** whenever you want to use the bridge. A normally launched Codex session does not expose the local connection the plugin needs.
+Use **Start Codex Deck.cmd** whenever you want to use the bridge. You do not need to restart an already launcher-started Codex session; after a normal Codex restart, run the launcher again.
+
+To remove that manual step, run `Start-CodexDeck.ps1 -InstallStartup` once.
+This creates a hidden shortcut in the Windows Startup folder and starts Codex
+with the bridge after you sign in. Remove it with `-UninstallStartup`.
 
 ## Recommended 15-key layout
 
@@ -63,6 +71,12 @@ Page 2:
 
 The page-navigation keys are built-in Stream Deck actions, not Codex Deck actions.
 
+The Stream Deck action list also exposes every official Codex Micro keycap as a
+standalone action. These execute the command currently associated with that
+keycap in the installed Codex build, independently of the six physical action
+slots. This makes the full keycap set practical on extra pages without changing
+your primary Micro layout.
+
 ## Official keycap SVGs are not included
 
 The repository and release intentionally do **not** contain OpenAI's Codex Micro command/keycap SVG files. The original agent-tile renderer, glow system, animations, and status marks are included under the repository license.
@@ -73,7 +87,7 @@ If you have the right to use the official keycap files from your own local Codex
 %LOCALAPPDATA%\CodexDeck\icons
 ```
 
-Rename each file to its Codex keycap ID, for example `FAST.svg`, `APPR.svg`, `REJ.svg`, `SPLIT.svg`, or `MIC.svg`. When a local file matches the keycap selected in Codex settings, Codex Deck renders it automatically on the corresponding six action keys. Nothing from this folder is uploaded or committed.
+Rename each file to its Codex keycap ID, for example `FAST.svg`, `APPR.svg`, `REJ.svg`, `SPLIT.svg`, or `MIC.svg`. Codex Deck renders matching files automatically on both synchronized Micro slots and standalone keycap actions. Nothing from this folder is uploaded or committed.
 
 For a careful local extraction workflow and a ready-to-copy Codex prompt, see [Local icon setup](docs/ICON_SETUP.md).
 
@@ -108,9 +122,9 @@ Do not use the launcher on a machine where you run untrusted local software. See
 
 ## Compatibility
 
-The initial public release was verified with:
+The current local build was verified with:
 
-- Codex for Windows `26.707.12708.0`
+- Codex for Windows `26.715.2305.0`
 - Stream Deck `7.4.2.22730`
 - Windows build `10.0.26220.0`
 - Node.js `24.13.0`

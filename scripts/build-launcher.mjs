@@ -9,12 +9,14 @@ await mkdir(output, { recursive: true });
 await build({
   entryPoints: [resolve("launcher/runtime-override.ts")],
   outfile: resolve(output, "runtime-override.mjs"),
-  bundle: true,
+  bundle: false,
   platform: "node",
   format: "esm",
   target: "node20",
   minify: false
 });
+
+await cp(resolve("node_modules/ws"), resolve(output, "node_modules/ws"), { recursive: true });
 
 for (const filename of ["Start Codex Deck.cmd", "Start-CodexDeck.ps1", "README.txt"]) {
   await cp(resolve("launcher", filename), resolve(output, filename));

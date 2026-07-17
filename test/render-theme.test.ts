@@ -1,0 +1,70 @@
+import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
+import test from "node:test";
+import { renderAgentSvg, renderBuiltinKeycap, renderFallbackKeycap, renderImportedKeycap, SIGNAL_COLORS } from "../src/render.js";
+
+test("dark agent tiles use Codex-like charcoal surfaces without pure black", () => {
+  const svg = renderAgentSvg(0, "Building dark mode", "thinking", true, 4, "dark");
+  assert.match(svg, /data-theme="dark"/);
+  assert.match(svg, /#343638/);
+  assert.match(svg, /#222426/);
+  assert.match(svg, /#F2F2EF/);
+  assert.match(svg, new RegExp(SIGNAL_COLORS.dark.thinking, "i"));
+  assert.doesNotMatch(svg, /#000(?:000)?\b/i);
+});
+
+test("light and dark agent themes remain visually distinct", () => {
+  const light = renderAgentSvg(0, "Ready", "idle", false, 0, "light");
+  const dark = renderAgentSvg(0, "Ready", "idle", false, 0, "dark");
+  assert.match(light, /data-theme="light"/);
+  assert.match(light, /#FFFFFF/);
+  assert.notEqual(light, dark);
+});
+
+test("user-local monochrome SVGs normalize to an off-white dark glyph", () => {
+  const input = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor"><path d="M2 2h20v20H2z" stroke="#000"/></svg>';
+  const output = decodeURIComponent(renderImportedKeycap(input, "dark").replace(/^data:image\/svg\+xml;charset=utf8,/, ""));
+  assert.match(output, /data-theme="dark"/);
+  assert.match(output, /fill="#F2F2EE"/);
+  assert.match(output, /stroke="#F2F2EE"/);
+  assert.doesNotMatch(output, /#000(?:000)?\b/i);
+});
+
+test("original navigation icons use the same dark keycap system", () => {
+  for (const icon of ["back", "forward", "sidebar", "home", "navigation"] as const) {
+    const output = decodeURIComponent(renderBuiltinKeycap(icon, "dark").replace(/^data:image\/svg\+xml;charset=utf8,/, ""));
+    assert.match(output, /data-theme="dark"/);
+    assert.match(output, /data-icon-source="codex-deck-original"/);
+    assert.match(output, /stroke="#F2F2EE"/);
+    assert.doesNotMatch(output, /#000(?:000)?\b/i);
+  }
+});
+
+test("renderer snapshot derives a theme without a versioned asset hash", async () => {
+  const source = await readFile(new URL("../src/codex-micro-renderer-bridge.ts", import.meta.url), "utf8");
+  assert.match(source, /backgroundColor/);
+  assert.match(source, /prefers-color-scheme: dark/);
+  assert.match(source, /theme\s*=\s*explicitDark/);
+});
+
+test("dark title contrast stays above WCAG AA for small text", () => {
+  assert.ok(contrast("#F2F2EF", "#2A2C2E") > 7);
+});
+
+test("missing local assets receive a readable themed fallback", () => {
+  const output = decodeURIComponent(renderFallbackKeycap("TERM", "dark").replace(/^data:image\/svg\+xml;charset=utf8,/, ""));
+  assert.match(output, /data-icon-source="fallback-label"/);
+  assert.match(output, />TERM<\/text>/);
+  assert.doesNotMatch(output, /#000(?:000)?\b/i);
+});
+
+function contrast(foreground: string, background: string): number {
+  const [lighter, darker] = [luminance(foreground), luminance(background)].sort((a, b) => b - a);
+  return (lighter! + .05) / (darker! + .05);
+}
+
+function luminance(hex: string): number {
+  const channels = hex.match(/[0-9a-f]{2}/gi)!.map((value) => Number.parseInt(value, 16) / 255)
+    .map((value) => value <= .04045 ? value / 12.92 : ((value + .055) / 1.055) ** 2.4);
+  return .2126 * channels[0]! + .7152 * channels[1]! + .0722 * channels[2]!;
+}

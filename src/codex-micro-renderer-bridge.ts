@@ -4,6 +4,7 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
 import WebSocket from "ws";
+import { OFFICIAL_KEYCAP_IDS, type OfficialKeycapId } from "./keycaps.js";
 import type { MicroActionSlot, MicroDirection, MicroSnapshot, ReasoningAdjustment } from "./types.js";
 
 type DebugTarget = {
@@ -44,9 +45,17 @@ const SNAPSHOT_EXPRESSION = `(async () => {
     import(urls['src-']),
     import(urls['use-reduced-motion-'])
   ]);
+  const settingStorageUrl = moduleUrl('setting-storage-');
+  const settingStorage = settingStorageUrl ? await import(settingStorageUrl) : null;
+  const definitions = vscode.Et ?? source.P;
+  const getSetting = settingStorage?.r ?? settings.u;
+  if (!definitions || typeof getSetting !== 'function') throw new Error('Codex Micro settings API was not found.');
 
-  if ((vscode.g.handlers.get('codex-micro-hid-event')?.size ?? 0) === 0) {
-    vscode.g.dispatchHostMessage(${JSON.stringify(DEVICE_STATE)});
+  const bus = [vscode.g, vscode.m, ...Object.values(vscode)].find((candidate) => candidate && typeof candidate === 'object' && candidate.handlers instanceof Map && (typeof candidate.dispatchHostMessage === 'function' || typeof candidate.dispatchMessage === 'function'));
+  if (!bus) throw new Error('Codex VS Code event bus was not found.');
+  const dispatch = bus.dispatchHostMessage ?? bus.dispatchMessage;
+  if ((bus.handlers.get('codex-micro-hid-event')?.size ?? 0) === 0) {
+    dispatch.call(bus, ${JSON.stringify(DEVICE_STATE)});
   }
   const root = document.getElementById('root');
   const reactKey = root && Object.getOwnPropertyNames(root).find((key) => key.startsWith('__reactContainer$'));
@@ -77,11 +86,37 @@ const SNAPSHOT_EXPRESSION = `(async () => {
   const atom = slotSignals.n.resolve(found.node, found.chain);
   const slots = found.node.store.get(atom);
   const [layout, agentSource, lightingAutoOff] = await Promise.all([
-    settings.u(source.P.layout),
-    settings.u(source.P.agentSource),
-    settings.u(source.P.lightingAutoOff)
+    getSetting(definitions.layout),
+    getSetting(definitions.agentSource),
+    getSetting(definitions.lightingAutoOff)
   ]);
-  return { slots, layout, agentSource, lightingAutoOff };
+
+  const html = document.documentElement;
+  const body = document.body;
+  const themeWords = [
+    html.dataset.theme,
+    html.dataset.colorScheme,
+    html.className,
+    body?.dataset?.theme,
+    body?.className,
+    getComputedStyle(html).colorScheme
+  ].filter(Boolean).join(' ').toLowerCase();
+  const explicitDark = /(^|[\\s_-])dark($|[\\s_-])/.test(themeWords);
+  const explicitLight = /(^|[\\s_-])light($|[\\s_-])/.test(themeWords);
+  const backgrounds = [body, document.getElementById('root'), html]
+    .filter(Boolean)
+    .map((element) => getComputedStyle(element).backgroundColor)
+    .map((value) => value.match(/rgba?\\(([^)]+)\\)/)?.[1]?.split(',').map(Number))
+    .filter((channels) => channels?.length >= 3 && (channels.length < 4 || channels[3] > 0));
+  const background = backgrounds[0];
+  const luminance = background
+    ? (0.2126 * background[0] + 0.7152 * background[1] + 0.0722 * background[2]) / 255
+    : null;
+  const theme = explicitDark || (!explicitLight && (luminance != null ? luminance < 0.42 : matchMedia('(prefers-color-scheme: dark)').matches))
+    ? 'dark'
+    : 'light';
+
+  return { slots, layout, agentSource, lightingAutoOff, theme };
 })()`;
 
 export class CodexMicroRendererBridge {
@@ -152,6 +187,56 @@ export class CodexMicroRendererBridge {
     }
   }
 
+  async runKeycap(keycapId: OfficialKeycapId): Promise<void> {
+    if (!OFFICIAL_KEYCAP_IDS.includes(keycapId)) throw new Error(`Unknown Codex Micro keycap: ${keycapId}`);
+    await this.ensureConnected();
+    const expression = `(async () => {
+      const urls = [...new Set([
+        ...[...document.querySelectorAll('link[href], script[src]')].map((element) => element.href || element.src),
+        ...performance.getEntriesByType('resource').map((entry) => entry.name)
+      ])];
+      const moduleUrl = (prefix) => urls.find((value) => value.includes('/assets/' + prefix));
+      const layoutUrl = moduleUrl('codex-micro-layout-');
+      const commandsUrl = moduleUrl('run-command-');
+      const vscodeUrl = moduleUrl('vscode-api-');
+      if (!layoutUrl || !commandsUrl || !vscodeUrl) throw new Error('Codex Micro command modules are unavailable.');
+      const [layout, commands, vscode] = await Promise.all([import(layoutUrl), import(commandsUrl), import(vscodeUrl)]);
+      const keycapGetter = Object.values(layout).find((candidate) => {
+        if (typeof candidate !== 'function') return false;
+        try { return candidate('FAST')?.id === 'FAST'; } catch { return false; }
+      });
+      if (typeof keycapGetter !== 'function') throw new Error('Codex Micro keycap registry changed.');
+      const keycap = keycapGetter(${JSON.stringify(keycapId)});
+      const action = keycap?.action;
+      if (!action) throw new Error('The selected Codex Micro keycap has no action.');
+
+      if (action.type === 'command') {
+        if (typeof commands.i !== 'function') throw new Error('Codex command runner export changed.');
+        const handled = commands.i(action.command, 'codex_micro_hid');
+        if (!handled) throw new Error('This Codex command is not active in the current view.');
+        return true;
+      }
+
+      const bus = [vscode.g, vscode.m, ...Object.values(vscode)].find((candidate) => candidate && typeof candidate === 'object' && (typeof candidate.dispatchHostMessage === 'function' || typeof candidate.dispatchMessage === 'function'));
+      if (!bus) throw new Error('Codex VS Code event bus was not found.');
+      if (action.type === 'external-url' && typeof bus.dispatchMessage === 'function') {
+        bus.dispatchMessage('open-in-browser', { url: action.url, source: 'manual', initiator: 'open_in_browser_bridge' });
+        return true;
+      }
+      if (action.type === 'composer-text' && typeof bus.dispatchHostMessage === 'function') {
+        bus.dispatchHostMessage({ type: 'codex-micro-insert-composer-text', text: action.text });
+        return true;
+      }
+      throw new Error('This Codex Micro keycap action is not supported as a standalone key.');
+    })()`;
+    try {
+      await this.evaluate(expression);
+    } catch (error) {
+      this.disconnect();
+      throw error;
+    }
+  }
+
   close(): void {
     this.disconnect();
   }
@@ -163,15 +248,18 @@ export class CodexMicroRendererBridge {
       const href = [...document.querySelectorAll('link[rel="modulepreload"]')].map((link) => link.href).find((value) => value.includes('/assets/vscode-api-'));
       if (!href) throw new Error('Codex VS Code bridge module is unavailable.');
       const vscode = await import(href);
-      if ((vscode.g.handlers.get(${JSON.stringify(requiredHandler)})?.size ?? 0) === 0) {
-        vscode.g.dispatchHostMessage(${JSON.stringify(DEVICE_STATE)});
+      const bus = [vscode.g, vscode.m, ...Object.values(vscode)].find((candidate) => candidate && typeof candidate === 'object' && candidate.handlers instanceof Map && (typeof candidate.dispatchHostMessage === 'function' || typeof candidate.dispatchMessage === 'function'));
+      if (!bus) throw new Error('Codex VS Code event bus was not found.');
+      const dispatch = bus.dispatchHostMessage ?? bus.dispatchMessage;
+      if ((bus.handlers.get(${JSON.stringify(requiredHandler)})?.size ?? 0) === 0) {
+        dispatch.call(bus, ${JSON.stringify(DEVICE_STATE)});
       }
       const deadline = Date.now() + 1200;
-      while ((vscode.g.handlers.get(${JSON.stringify(requiredHandler)})?.size ?? 0) === 0 && Date.now() < deadline) {
+      while ((bus.handlers.get(${JSON.stringify(requiredHandler)})?.size ?? 0) === 0 && Date.now() < deadline) {
         await new Promise((resolve) => setTimeout(resolve, 25));
       }
-      if ((vscode.g.handlers.get(${JSON.stringify(requiredHandler)})?.size ?? 0) === 0) throw new Error('Codex Micro input handler is not active.');
-      vscode.g.dispatchHostMessage(${JSON.stringify(message)});
+      if ((bus.handlers.get(${JSON.stringify(requiredHandler)})?.size ?? 0) === 0) throw new Error('Codex Micro input handler is not active.');
+      dispatch.call(bus, ${JSON.stringify(message)});
       return true;
     })()`;
     try {

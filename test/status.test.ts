@@ -7,6 +7,8 @@ test("native Micro states map to the Stream Deck status palette", () => {
   assert.equal(visualStatusFromMicro("working"), "thinking");
   assert.equal(visualStatusFromMicro("unread"), "complete");
   assert.equal(visualStatusFromMicro("approval"), "input");
+  assert.equal(visualStatusFromMicro("awaiting-approval"), "input");
+  assert.equal(visualStatusFromMicro("awaiting-response"), "input");
   assert.equal(visualStatusFromMicro("error"), "error");
   assert.equal(visualStatusFromMicro("idle"), "idle");
   assert.equal(visualStatusFromMicro("future-state"), "idle");

@@ -1,6 +1,6 @@
 {
   "name": "codex-stream-deck",
-  "version": "0.4.1",
+  "version": "0.5.0",
   "private": false,
   "type": "module",
   "description": "Unofficial Windows bridge between the Codex desktop app and Elgato Stream Deck",
@@ -16,6 +16,7 @@
   "scripts": {
     "build": "node scripts/build.mjs && node scripts/build-launcher.mjs",
     "docs:preview": "tsx scripts/generate-doc-preview.ts",
+    "qa:local-icons": "tsx scripts/generate-local-icon-qa.ts",
     "check": "tsc --noEmit",
     "test": "tsx --test test/*.test.ts",
     "validate": "npm run build && streamdeck validate dist/com.simeo.codex-deck.sdPlugin",

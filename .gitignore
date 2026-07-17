@@ -1,0 +1,17 @@
+node_modules/
+dist/
+release/
+outputs/
+research/
+assets/codex-micro-icon-keyset/
+static/imgs/commands/
+static/imgs/official/
+design-qa.md
+*.streamDeckPlugin
+codex-deck-launcher-*.zip
+*.log
+.env
+.env.*
+!.env.example
+*.tmp
+.DS_Store

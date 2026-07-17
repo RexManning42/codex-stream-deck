@@ -1,0 +1,13 @@
+import assert from "node:assert/strict";
+import test from "node:test";
+import { visualStatusFromMicro } from "../src/status.js";
+
+test("native Micro states map to the Stream Deck status palette", () => {
+  assert.equal(visualStatusFromMicro("off"), "empty");
+  assert.equal(visualStatusFromMicro("working"), "thinking");
+  assert.equal(visualStatusFromMicro("unread"), "complete");
+  assert.equal(visualStatusFromMicro("approval"), "input");
+  assert.equal(visualStatusFromMicro("error"), "error");
+  assert.equal(visualStatusFromMicro("idle"), "idle");
+  assert.equal(visualStatusFromMicro("future-state"), "idle");
+});

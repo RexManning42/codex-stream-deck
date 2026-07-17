@@ -1,0 +1,36 @@
+{
+  "name": "codex-stream-deck",
+  "version": "0.4.1",
+  "private": false,
+  "type": "module",
+  "description": "Unofficial Windows bridge between the Codex desktop app and Elgato Stream Deck",
+  "license": "MIT",
+  "author": "Dazer",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/dazer1234/codex-stream-deck.git"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "build": "node scripts/build.mjs && node scripts/build-launcher.mjs",
+    "docs:preview": "tsx scripts/generate-doc-preview.ts",
+    "check": "tsc --noEmit",
+    "test": "tsx --test test/*.test.ts",
+    "validate": "npm run build && streamdeck validate dist/com.simeo.codex-deck.sdPlugin",
+    "pack": "npm run build && streamdeck pack dist/com.simeo.codex-deck.sdPlugin --force"
+  },
+  "dependencies": {
+    "@elgato/streamdeck": "2.1.0",
+    "ws": "^8.21.1"
+  },
+  "devDependencies": {
+    "@elgato/cli": "1.7.4",
+    "@types/node": "^24.0.0",
+    "@types/ws": "^8.18.1",
+    "esbuild": "0.28.1",
+    "tsx": "^4.20.0",
+    "typescript": "^5.9.0"
+  }
+}

@@ -411,6 +411,31 @@ test("relay rejects a client with the wrong token before publishing state", asyn
   await server.close();
 });
 
+test("authenticated relay survives an unavailable Codex snapshot", async () => {
+  const port = await freePort();
+  const logs: string[] = [];
+  const control = {
+    refresh: async (): Promise<MicroSnapshot> => { throw new Error("bridge offline"); },
+    sendAgent: async () => {}, sendAction: async () => {}, sendJoystick: async () => {},
+    sendEncoder: async () => {}, adjustReasoning: async () => {}, runKeycap: async () => {}
+  };
+  const server = new CodexRelayServer(
+    { enabled: true, listenHost: "127.0.0.1", port, token: "t".repeat(32) }, host, control,
+    (message) => logs.push(message)
+  );
+  await server.start();
+  const socket = new WebSocket(`ws://127.0.0.1:${port}`);
+  const messages = messageQueue(socket);
+  await onceOpen(socket);
+  socket.send(JSON.stringify({ type: "auth", protocol: RELAY_PROTOCOL_VERSION, token: "t".repeat(32) }));
+  assert.equal((await messages.next()).type, "ready");
+  await new Promise((resolve) => setTimeout(resolve, 50));
+  assert.equal(socket.readyState, WebSocket.OPEN);
+  assert.equal(logs.filter((message) => message.includes("bridge offline")).length, 1);
+  socket.close();
+  await server.close();
+});
+
 async function freePort(): Promise<number> {
   const server = createServer();
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));

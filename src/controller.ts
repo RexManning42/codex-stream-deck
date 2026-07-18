@@ -49,6 +49,7 @@ export class DeckController {
   private lastAssignmentSignature = "";
   private lastStatusSignature = "";
   private lastLayoutSignature = "";
+  private lastAgentSourceSignature = "";
 
   async start(): Promise<void> {
     this.stopped = false;
@@ -189,7 +190,15 @@ export class DeckController {
     if (this.localHost && this.targetPlatform !== this.localHost.platform && remoteSnapshot) this.targetHostId = remoteSnapshot.host.hostId;
     else if (this.localHost && this.targetPlatform === this.localHost.platform) this.targetHostId = this.localHost.hostId;
     const inputs = [this.localSnapshot, remoteSnapshot].filter((value): value is HostSnapshot => value != null);
-    this.routedSlots = this.activityIndex.merge(inputs);
+    const agentSources = inputs.map((input) => `${input.host.platform}=${input.snapshot.agentSource}`);
+    const agentSourceSignature = agentSources.join(",");
+    if (agentSourceSignature !== this.lastAgentSourceSignature) {
+      this.lastAgentSourceSignature = agentSourceSignature;
+      if (new Set(inputs.map((input) => input.snapshot.agentSource)).size > 1) {
+        streamDeck.logger.warn(`Codex agent sources differ (${agentSources.join(" ")}). The Windows controller mode determines the combined list; Pinned and Individual assignments merge only hosts using that mode.`);
+      }
+    }
+    this.routedSlots = this.activityIndex.merge(inputs, Date.now(), this.localHost?.hostId);
 
     const assignments = this.routedSlots.map((slot) => `${slot.id}=${slot.host.platform}:${slot.threadKey ?? "empty"}`).join(" ");
     if (assignments !== this.lastAssignmentSignature) {

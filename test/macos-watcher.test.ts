@@ -20,36 +20,37 @@ test("initial existing normal session remains untouched", () => {
 
 test("same process generation is never recovery-restarted repeatedly", () => {
   let result = evaluateWatcherPolicy(createWatcherPolicyState(0), {
-    now: 0, generation: "A", bridgeHealthy: false
+    now: 0, generation: "A", bridgeHealthy: true
   });
-  result = evaluateWatcherPolicy(result.state, { now: 6_000, generation: "B", bridgeHealthy: false });
+  result = evaluateWatcherPolicy(result.state, { now: 30_000, generation: "B", bridgeHealthy: false });
+  result = evaluateWatcherPolicy(result.state, { now: 40_000, generation: "B", bridgeHealthy: false });
   assert.equal(result.action.type, "restart-for-recovery");
-  result = evaluateWatcherPolicy(result.state, { now: 37_000, generation: "B", bridgeHealthy: false });
-  assert.deepEqual(result.action, { type: "wait", reason: "recovery-already-attempted-for-generation" });
+  result = evaluateWatcherPolicy(result.state, { now: 71_000, generation: "B", bridgeHealthy: false });
+  assert.deepEqual(result.action, { type: "wait", reason: "automatic-recovery-circuit-open" });
 });
 
 test("rapid main-process replacement is detected without observing a stopped poll", () => {
   let result = evaluateWatcherPolicy(createWatcherPolicyState(0), {
-    now: 0, generation: "A", bridgeHealthy: false
+    now: 0, generation: "A", bridgeHealthy: true
   });
-  result = evaluateWatcherPolicy(result.state, { now: 6_000, generation: "B", bridgeHealthy: false });
+  result = evaluateWatcherPolicy(result.state, { now: 30_000, generation: "B", bridgeHealthy: false });
+  assert.deepEqual(result.action, { type: "wait", reason: "confirm-stable-unbridged-generation" });
+  result = evaluateWatcherPolicy(result.state, { now: 40_000, generation: "B", bridgeHealthy: false });
   assert.deepEqual(result.action, {
     type: "restart-for-recovery",
     generation: "B",
-    reason: "main-process-generation-changed"
+    reason: "previous-healthy-bridge-missing"
   });
 });
 
-test("observed stopped interval triggers one bridge launch and waits for startup", () => {
+test("an observed stopped interval never auto-launches Codex", () => {
   let result = evaluateWatcherPolicy(createWatcherPolicyState(0), {
     now: 0, generation: "A", bridgeHealthy: true
   });
   result = evaluateWatcherPolicy(result.state, { now: 6_000, generation: null, bridgeHealthy: false });
-  assert.deepEqual(result.action, { type: "wait", reason: "confirm-stopped-interval" });
+  assert.deepEqual(result.action, { type: "wait", reason: "codex-not-running" });
   result = evaluateWatcherPolicy(result.state, { now: 8_001, generation: null, bridgeHealthy: false });
-  assert.equal(result.action.type, "launch-bridge");
-  result = evaluateWatcherPolicy(result.state, { now: 9_000, generation: null, bridgeHealthy: false });
-  assert.deepEqual(result.action, { type: "wait", reason: "bridge-startup-pending" });
+  assert.deepEqual(result.action, { type: "wait", reason: "codex-not-running" });
 });
 
 test("previous healthy bridge triggers recovery after app update replacement", () => {
@@ -57,9 +58,24 @@ test("previous healthy bridge triggers recovery after app update replacement", (
     now: 0, generation: "A:/Applications/Old.app", bridgeHealthy: true
   });
   result = evaluateWatcherPolicy(result.state, {
-    now: 6_000, generation: "B:/Applications/New.app", bridgeHealthy: false
+    now: 30_000, generation: "B:/Applications/New.app", bridgeHealthy: false
+  });
+  assert.equal(result.action.type, "wait");
+  result = evaluateWatcherPolicy(result.state, {
+    now: 40_000, generation: "B:/Applications/New.app", bridgeHealthy: false
   });
   assert.equal(result.action.type, "restart-for-recovery");
+});
+
+test("a recovery attempt opens a global circuit across replacement generations", () => {
+  let result = evaluateWatcherPolicy(createWatcherPolicyState(0), {
+    now: 0, generation: "A", bridgeHealthy: true
+  });
+  result = evaluateWatcherPolicy(result.state, { now: 30_000, generation: "B", bridgeHealthy: false });
+  result = evaluateWatcherPolicy(result.state, { now: 40_000, generation: "B", bridgeHealthy: false });
+  assert.equal(result.action.type, "restart-for-recovery");
+  result = evaluateWatcherPolicy(result.state, { now: 71_000, generation: "C", bridgeHealthy: false });
+  assert.deepEqual(result.action, { type: "wait", reason: "automatic-recovery-circuit-open" });
 });
 
 test("LaunchAgent startup race waits, preserves a fresh install, and recovers prior bridge state", () => {
@@ -74,8 +90,8 @@ test("LaunchAgent startup race waits, preserves a fresh install, and recovers pr
   }).state;
   prior = resumeWatcherPolicyState(prior, 100_000);
   let resumed = evaluateWatcherPolicy(prior, { now: 101_000, generation: "LOGIN", bridgeHealthy: false });
-  assert.deepEqual(resumed.action, { type: "wait", reason: "launch-agent-startup-grace" });
-  resumed = evaluateWatcherPolicy(resumed.state, { now: 106_000, generation: "LOGIN", bridgeHealthy: false });
+  assert.deepEqual(resumed.action, { type: "wait", reason: "bridge-startup-pending" });
+  resumed = evaluateWatcherPolicy(resumed.state, { now: 130_000, generation: "LOGIN", bridgeHealthy: false });
   assert.equal(resumed.action.type, "restart-for-recovery");
 });
 

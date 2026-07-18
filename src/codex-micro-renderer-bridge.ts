@@ -1,4 +1,5 @@
 import { execFile } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { promisify } from "node:util";
@@ -13,6 +14,23 @@ type DebugTarget = {
   url: string;
   webSocketDebuggerUrl?: string;
 };
+
+export function selectCodexMainTarget(targets: DebugTarget[]): DebugTarget | undefined {
+  const candidates = targets.filter((target) =>
+    target.type === "page" && target.webSocketDebuggerUrl && target.url.startsWith("app://")
+  );
+  const isIndexDocument = (target: DebugTarget): boolean => {
+    try { return new URL(target.url).pathname === "/index.html"; }
+    catch { return false; }
+  };
+  const isAuxiliarySurface = (target: DebugTarget): boolean =>
+    /avatar-overlay|composition-surface/i.test(target.url);
+
+  return candidates.find((target) => isIndexDocument(target) && !new URL(target.url).search)
+    ?? candidates.find(isIndexDocument)
+    ?? candidates.find((target) => !isAuxiliarySurface(target) && !target.url.includes("initialRoute="))
+    ?? candidates.find((target) => !isAuxiliarySurface(target));
+}
 
 type CdpResponse = {
   id?: number;
@@ -108,25 +126,55 @@ const SNAPSHOT_EXPRESSION = `(async () => {
   let layout = definitions.layout.default;
   let agentSource = definitions.agentSource.default;
   let lightingAutoOff = definitions.lightingAutoOff?.default ?? '3-minutes';
-  const settingReaders = exportedValues.filter((candidate) => {
-    if (typeof candidate !== 'function' || candidate.length !== 2) return false;
+
+  let settingsResolved = false;
+  const directSettingReader = exportedValues.find((candidate) => {
+    if (typeof candidate !== 'function' || candidate.length !== 1) return false;
     const source = Function.prototype.toString.call(candidate);
-    return source.includes('.key') && source.includes('.default');
+    return source.includes('get-setting') && source.includes('.default');
   });
-  for (const readSetting of settingReaders) {
+  if (directSettingReader) {
     try {
-      const candidateLayout = await readSetting(found.node.store.get, definitions.layout);
-      const candidateAgentSource = await readSetting(found.node.store.get, definitions.agentSource);
+      const candidateLayout = await directSettingReader(definitions.layout);
+      const candidateAgentSource = await directSettingReader(definitions.agentSource);
       const candidateLightingAutoOff = definitions.lightingAutoOff
-        ? await readSetting(found.node.store.get, definitions.lightingAutoOff)
+        ? await directSettingReader(definitions.lightingAutoOff)
         : lightingAutoOff;
-      if (candidateLayout?.version !== 1 || typeof candidateLayout.slots !== 'object') continue;
-      if (!['pinned', 'recent', 'priority', 'custom'].includes(candidateAgentSource)) continue;
-      layout = candidateLayout;
-      agentSource = candidateAgentSource;
-      if (typeof candidateLightingAutoOff === 'string') lightingAutoOff = candidateLightingAutoOff;
-      break;
+      if (
+        candidateLayout?.version === 1 &&
+        typeof candidateLayout.slots === 'object' &&
+        ['pinned', 'recent', 'priority', 'custom'].includes(candidateAgentSource)
+      ) {
+        layout = candidateLayout;
+        agentSource = candidateAgentSource;
+        if (typeof candidateLightingAutoOff === 'string') lightingAutoOff = candidateLightingAutoOff;
+        settingsResolved = true;
+      }
     } catch {}
+  }
+
+  if (!settingsResolved) {
+    const settingReaders = exportedValues.filter((candidate) => {
+      if (typeof candidate !== 'function' || candidate.length !== 2) return false;
+      const source = Function.prototype.toString.call(candidate);
+      return source.includes('.key') && source.includes('.default');
+    });
+    const getStoreValue = found.node.store.get.bind(found.node.store);
+    for (const readSetting of settingReaders) {
+      try {
+        const candidateLayout = await readSetting(getStoreValue, definitions.layout);
+        const candidateAgentSource = await readSetting(getStoreValue, definitions.agentSource);
+        const candidateLightingAutoOff = definitions.lightingAutoOff
+          ? await readSetting(getStoreValue, definitions.lightingAutoOff)
+          : lightingAutoOff;
+        if (candidateLayout?.version !== 1 || typeof candidateLayout.slots !== 'object') continue;
+        if (!['pinned', 'recent', 'priority', 'custom'].includes(candidateAgentSource)) continue;
+        layout = candidateLayout;
+        agentSource = candidateAgentSource;
+        if (typeof candidateLightingAutoOff === 'string') lightingAutoOff = candidateLightingAutoOff;
+        break;
+      } catch {}
+    }
   }
   const toEpoch = (value) => {
     if (typeof value === 'number' && Number.isFinite(value) && value > 0) return value < 100000000000 ? value * 1000 : value;
@@ -177,6 +225,7 @@ export class CodexMicroRendererBridge {
   private connecting?: Promise<void>;
   private lastSnapshot?: MicroSnapshot;
   private readonly sessionOwnership = new CodexSessionOwnershipIndex();
+  private readonly evaluationNamespace = randomUUID();
 
   constructor(private readonly log: (message: string) => void) {}
 
@@ -204,6 +253,7 @@ export class CodexMicroRendererBridge {
     await this.dispatch("codex-micro-hid-event", {
       event: { key: `AG0${slot}`, act, slot, threadKey }
     }, "codex-micro-hid-event");
+    if (act === 1 && threadKey) this.sessionOwnership.markOpened(threadKey);
   }
 
   async sendAction(slot: MicroActionSlot, act: 0 | 1): Promise<void> {
@@ -346,8 +396,7 @@ export class CodexMicroRendererBridge {
   private async connect(): Promise<void> {
     const port = await discoverDebugPort();
     const targets = await fetchJson<DebugTarget[]>(`http://127.0.0.1:${port}/json/list`);
-    const candidates = targets.filter((target) => target.type === "page" && target.webSocketDebuggerUrl && target.url.startsWith("app://"));
-    const target = candidates.find((item) => !item.url.includes("initialRoute=")) ?? candidates[0];
+    const target = selectCodexMainTarget(targets);
     if (!target?.webSocketDebuggerUrl) throw new Error("Kein Codex-Hauptfenster mit Debug-Brücke gefunden.");
 
     const socket = new WebSocket(target.webSocketDebuggerUrl);
@@ -367,6 +416,10 @@ export class CodexMicroRendererBridge {
     const socket = this.socket;
     if (!socket || socket.readyState !== WebSocket.OPEN) return Promise.reject(new Error("Codex-Micro-Brücke ist nicht verbunden."));
     const id = ++this.nextId;
+    // CDP may garbage-collect an awaited Runtime.evaluate promise while a
+    // renderer handler or dynamic import is still pending. Keep the exact
+    // promise reachable from the renderer until after our own timeout.
+    const retainedExpression = retainEvaluationPromise(expression, `${this.evaluationNamespace}-${id}`);
     return new Promise<T>((resolve, reject) => {
       const timer = setTimeout(() => {
         this.pending.delete(id);
@@ -382,7 +435,7 @@ export class CodexMicroRendererBridge {
           resolve(result?.result?.value as T);
         }
       });
-      socket.send(JSON.stringify({ id, method: "Runtime.evaluate", params: { expression, awaitPromise: true, returnByValue: true } }));
+      socket.send(JSON.stringify({ id, method: "Runtime.evaluate", params: { expression: retainedExpression, awaitPromise: true, returnByValue: true } }));
     });
   }
 
@@ -409,6 +462,17 @@ export class CodexMicroRendererBridge {
     }
     this.pending.clear();
   }
+}
+
+export function retainEvaluationPromise(expression: string, id: string | number): string {
+  const key = `codex-deck-${id}`;
+  return `(() => {
+    const store = globalThis.__codexDeckPendingEvaluations ??= new Map();
+    const pending = Promise.resolve((${expression}));
+    store.set(${JSON.stringify(key)}, pending);
+    setTimeout(() => store.delete(${JSON.stringify(key)}), 10000);
+    return pending;
+  })()`;
 }
 
 async function discoverDebugPort(): Promise<number> {

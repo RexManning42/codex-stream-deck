@@ -52,6 +52,8 @@ Other Stream Deck models may work, but the included layout and physical-device t
 4. In **Codex Settings > Codex Micro**, choose the agent source, action assignments, joystick actions, and encoder behavior.
 5. Build the two Stream Deck pages below.
 
+In Windows + Mac mode, choose the same agent-source mode in both Codex apps when you want both native Pinned lists or both sets of Individual assignments to contribute. Pinned tasks are interleaved fairly. For Individual assignments, the Stream Deck computer wins when both apps assign different tasks to one button, while the other computer fills empty slots. Mirrored copies of the same task are shown only once. See [Multi-host behavior](docs/MULTI_HOST.md#agent-source-modes).
+
 ## Recommended 15-key layout
 
 This is the actual polished two-page layout used for the MK.2. It keeps the six live agents on the main page and puts lower-frequency navigation/reasoning controls on page 2.
@@ -123,10 +125,10 @@ Do not use the launcher while running untrusted local software. See [SECURITY.md
 
 ## Compatibility
 
-Release 0.6.0 was locally validated against:
+The current build was locally validated against:
 
-- Codex for Windows `26.715.3651.0`
-- Codex for macOS `26.715.31251` (build `5538`)
+- Codex for Windows `26.715.4045.0`
+- Codex for macOS `26.715.31925`
 - Stream Deck `7.4.2.22730`
 - Windows `10.0.26220.0`
 - Node.js `24.13.0`
@@ -136,7 +138,7 @@ The Windows physical-device path and the Windows+Mac relay were exercised on the
 
 ## Troubleshooting
 
-Start with [Troubleshooting](docs/TROUBLESHOOTING.md). The important rule is: restart only the Stream Deck plugin/app for plugin updates. Do not restart Codex unless the launcher explicitly says an unbridged Codex generation needs one recovery restart and you choose to proceed.
+Start with [Troubleshooting](docs/TROUBLESHOOTING.md). The important rule is: restart only the Stream Deck plugin/app for plugin updates. The macOS watcher never launches a closed Codex app; after a manual app start it permits at most one guarded recovery restart and opens a global cooldown before any later recovery.
 
 ## Build and release validation
 

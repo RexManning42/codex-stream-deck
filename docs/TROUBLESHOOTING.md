@@ -30,6 +30,16 @@ tail -n 100 "$HOME/Library/Application Support/CodexDeck/watcher.log"
 
 Do not replace, re-sign, or edit the Codex app bundle. If `start` says an existing normal session needs a restart, it waits for your explicit `yes`.
 
+The installed watcher never launches Codex while it is closed. After you open Codex manually, one controlled recovery restart can occur if the new process lacks the loopback bridge. A global cooldown prevents further automatic restarts across replacement PIDs.
+
+If an older watcher is repeatedly relaunching Codex after a crash or empty battery, stop only that watcher first:
+
+```zsh
+launchctl bootout "gui/$(id -u)/com.simeo.codex-deck.watcher"
+```
+
+Then install the launcher from the newest release. This command does not start, stop, or modify Codex itself.
+
 ## Agent keys say Bridge offline
 
 - Confirm Codex was started through the launcher.
@@ -45,7 +55,7 @@ The native handler was unavailable or the action is not valid in the current com
 
 ## Agent assignments are unexpected
 
-Codex Deck does not choose the six native tasks. Open **Codex Settings > Codex Micro > Agent keys** and select pinned, recently updated, priority, or custom assignments. In multi-host mode, both native six-slot lists are de-duplicated and globally ordered; mirrored tasks route to the host owning the exact local rollout filename.
+Codex Deck does not choose the six native tasks. Open **Codex Settings > Codex Micro > Agent keys** and select pinned, recently updated, priority, or custom assignments. For combined Pinned or Individual assignments, select the same mode in both Codex apps. Pinned tasks are interleaved between hosts; in Individual mode the Stream Deck computer wins a conflicting slot and the remote host fills empty slots. Both lists are de-duplicated, and mirrored tasks route to the host owning the exact local rollout filename.
 
 ## Local command icon does not appear
 
@@ -63,6 +73,7 @@ Restart Stream Deck. Elgato notes that plugins can fail to appear when the Strea
 - First confirm both local bridges work independently.
 - SSH mode: confirm the Windows watcher is installed and the SSH alias works outside Codex's remote-CLI connection.
 - Inspect `%LOCALAPPDATA%\CodexDeck\watcher.log` for the dedicated relay tunnel state.
+- On macOS, inspect both `watcher.log` and `watcher.stderr.log` under `~/Library/Application Support/CodexDeck/`.
 - Confirm the Windows relay URL is `ws://127.0.0.1:<port>` for SSH, or an explicit Tailscale address.
 - Restart only the Stream Deck plugin/app after configuration. Do not restart Codex.
 - Run `Configure-CodexDeckRelay.ps1 -Disable` to return cleanly to Windows-only mode.

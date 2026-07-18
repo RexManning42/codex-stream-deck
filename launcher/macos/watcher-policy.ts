@@ -8,7 +8,6 @@ export type WatcherAction =
   | { type: "preserve-initial-session" }
   | { type: "reuse-bridge" }
   | { type: "wait"; reason: string }
-  | { type: "launch-bridge"; reason: string }
   | { type: "restart-for-recovery"; generation: string; reason: string };
 
 export type WatcherPolicyState = {
@@ -19,12 +18,16 @@ export type WatcherPolicyState = {
   stoppedSince: number | null;
   hadHealthyBridge: boolean;
   recoveryPendingUntil: number;
+  recoveryCooldownUntil: number;
+  unbridgedGeneration: string | null;
+  unbridgedSince: number | null;
   recoveryAttempts: string[];
 };
 
-export const DEFAULT_STARTUP_GRACE_MS = 5_000;
-export const DEFAULT_STOPPED_GRACE_MS = 2_000;
+export const DEFAULT_STARTUP_GRACE_MS = 30_000;
+export const DEFAULT_UNBRIDGED_STABLE_MS = 10_000;
 export const DEFAULT_RECOVERY_STARTUP_MS = 30_000;
+export const DEFAULT_RECOVERY_COOLDOWN_MS = 10 * 60_000;
 
 export function createWatcherPolicyState(now = Date.now()): WatcherPolicyState {
   return {
@@ -35,6 +38,9 @@ export function createWatcherPolicyState(now = Date.now()): WatcherPolicyState {
     stoppedSince: null,
     hadHealthyBridge: false,
     recoveryPendingUntil: 0,
+    recoveryCooldownUntil: 0,
+    unbridgedGeneration: null,
+    unbridgedSince: null,
     recoveryAttempts: []
   };
 }
@@ -48,8 +54,11 @@ export function resumeWatcherPolicyState(
     ...stored,
     startupGraceUntil: now + DEFAULT_STARTUP_GRACE_MS,
     stoppedSince: null,
-    recoveryPendingUntil: 0,
-    recoveryAttempts: [...stored.recoveryAttempts].slice(-16)
+    recoveryPendingUntil: Math.max(Number(stored.recoveryPendingUntil) || 0, now + DEFAULT_STARTUP_GRACE_MS),
+    recoveryCooldownUntil: Number(stored.recoveryCooldownUntil) || 0,
+    unbridgedGeneration: null,
+    unbridgedSince: null,
+    recoveryAttempts: [...(stored.recoveryAttempts ?? [])].slice(-16)
   };
 }
 
@@ -81,18 +90,11 @@ export function evaluateWatcherPolicy(
 
   if (generation == null) {
     if (next.stoppedSince == null) next.stoppedSince = now;
-    if (now < next.recoveryPendingUntil) {
-      return { state: next, action: { type: "wait", reason: "bridge-startup-pending" } };
-    }
-    if (now < next.startupGraceUntil) {
-      return { state: next, action: { type: "wait", reason: "launch-agent-startup-grace" } };
-    }
-    if (now - next.stoppedSince < DEFAULT_STOPPED_GRACE_MS) {
-      return { state: next, action: { type: "wait", reason: "confirm-stopped-interval" } };
-    }
-    next.recoveryPendingUntil = now + DEFAULT_RECOVERY_STARTUP_MS;
-    next.stoppedSince = now;
-    return { state: next, action: { type: "launch-bridge", reason: "observed-stopped-interval" } };
+    next.lastGeneration = null;
+    next.suppressedInitialGeneration = null;
+    next.unbridgedGeneration = null;
+    next.unbridgedSince = null;
+    return { state: next, action: { type: "wait", reason: "codex-not-running" } };
   }
 
   const previousGeneration = next.lastGeneration;
@@ -105,7 +107,14 @@ export function evaluateWatcherPolicy(
     next.hadHealthyBridge = true;
     next.recoveryPendingUntil = 0;
     next.suppressedInitialGeneration = null;
+    next.unbridgedGeneration = null;
+    next.unbridgedSince = null;
     return { state: next, action: { type: "reuse-bridge" } };
+  }
+
+  if (next.unbridgedGeneration !== generation) {
+    next.unbridgedGeneration = generation;
+    next.unbridgedSince = now;
   }
 
   if (now < next.recoveryPendingUntil) {
@@ -125,8 +134,16 @@ export function evaluateWatcherPolicy(
     return { state: next, action: { type: "preserve-initial-session" } };
   }
 
+  if (now < next.recoveryCooldownUntil) {
+    return { state: next, action: { type: "wait", reason: "automatic-recovery-circuit-open" } };
+  }
+
   if (next.recoveryAttempts.includes(generation)) {
     return { state: next, action: { type: "wait", reason: "recovery-already-attempted-for-generation" } };
+  }
+
+  if (next.unbridgedSince == null || now - next.unbridgedSince < DEFAULT_UNBRIDGED_STABLE_MS) {
+    return { state: next, action: { type: "wait", reason: "confirm-stable-unbridged-generation" } };
   }
 
   const shouldRecover = generationChanged || observedStoppedInterval || next.hadHealthyBridge || now >= next.startupGraceUntil;
@@ -136,6 +153,9 @@ export function evaluateWatcherPolicy(
 
   next.recoveryAttempts = [...next.recoveryAttempts.slice(-15), generation];
   next.recoveryPendingUntil = now + DEFAULT_RECOVERY_STARTUP_MS;
+  next.recoveryCooldownUntil = now + DEFAULT_RECOVERY_COOLDOWN_MS;
+  next.unbridgedGeneration = null;
+  next.unbridgedSince = null;
   const reason = generationChanged
     ? "main-process-generation-changed"
     : observedStoppedInterval

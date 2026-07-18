@@ -142,6 +142,23 @@ export function buildRuntimeVerificationExpression(): string {
 type DebugTarget = { type?: string; url?: string; webSocketDebuggerUrl?: string };
 type Pending = { resolve: (value: unknown) => void; reject: (error: Error) => void };
 
+export function selectRuntimeTarget(targets: DebugTarget[]): DebugTarget | undefined {
+  const pages = targets.filter((target) =>
+    target.type === "page" && target.webSocketDebuggerUrl && target.url?.startsWith("app://")
+  );
+  const isIndexDocument = (target: DebugTarget): boolean => {
+    try { return new URL(target.url!).pathname === "/index.html"; }
+    catch { return false; }
+  };
+  const isAuxiliarySurface = (target: DebugTarget): boolean =>
+    /avatar-overlay|composition-surface/i.test(target.url ?? "");
+
+  return pages.find((target) => isIndexDocument(target) && !new URL(target.url!).search)
+    ?? pages.find(isIndexDocument)
+    ?? pages.find((target) => !isAuxiliarySurface(target) && !target.url?.includes("initialRoute="))
+    ?? pages.find((target) => !isAuxiliarySurface(target));
+}
+
 class CdpClient {
   private readonly socket: WebSocket;
   private nextId = 0;
@@ -189,8 +206,7 @@ async function findTarget(port: number, timeout = 20_000): Promise<DebugTarget> 
       const response = await fetch(`http://127.0.0.1:${port}/json/list`);
       if (response.ok) {
         const targets = await response.json() as DebugTarget[];
-        const pages = targets.filter((target) => target.type === "page" && target.webSocketDebuggerUrl && target.url?.startsWith("app://"));
-        const target = pages.find((page) => !page.url?.includes("initialRoute=")) ?? pages[0];
+        const target = selectRuntimeTarget(targets);
         if (target) return target;
       }
     } catch { /* Codex is still starting. */ }

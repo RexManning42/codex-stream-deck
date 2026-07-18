@@ -1,14 +1,16 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
-import { REASONING_COMMANDS } from "../src/codex-micro-renderer-bridge.js";
+import { REASONING_COMMANDS, retainEvaluationPromise, selectCodexMainTarget } from "../src/codex-micro-renderer-bridge.js";
 import { ADDITIONAL_KEYCAPS, OFFICIAL_KEYCAP_IDS } from "../src/keycaps.js";
 import { visualStatusFromMicro } from "../src/status.js";
 
 test("official Micro statuses map to the Stream Deck color states", () => {
   assert.equal(visualStatusFromMicro("off"), "empty");
   assert.equal(visualStatusFromMicro("working"), "thinking");
+  assert.equal(visualStatusFromMicro("thinking"), "thinking");
   assert.equal(visualStatusFromMicro("unread"), "complete");
+  assert.equal(visualStatusFromMicro("done"), "complete");
   assert.equal(visualStatusFromMicro("approval"), "input");
   assert.equal(visualStatusFromMicro("awaiting-approval"), "input");
   assert.equal(visualStatusFromMicro("awaiting-response"), "input");
@@ -32,8 +34,40 @@ test("renderer bridge uses native Micro events and discovers hashed modules at r
   assert.match(source, /createSubscriberAtom/);
   assert.match(source, /slots\.length === 6/);
   assert.match(source, /codex-micro-agent-source/);
+  assert.match(source, /directSettingReader/);
+  assert.match(source, /get-setting/);
+  assert.match(source, /found\.node\.store\.get\.bind\(found\.node\.store\)/);
   assert.doesNotMatch(source, /candidate\?\.token === appScope/);
   assert.doesNotMatch(source, /D90_rd6W|SFcKxWqG|DJFcGyy5/);
+});
+
+test("renderer bridge prefers the main index document over macOS avatar surfaces", () => {
+  const target = selectCodexMainTarget([
+    { type: "page", url: "app://-/index.html?initialRoute=%2Favatar-overlay", webSocketDebuggerUrl: "ws://route" },
+    { type: "page", url: "app://-/avatar-overlay-composition-surface.html?surfaceId=mascot-badge", webSocketDebuggerUrl: "ws://mascot" },
+    { type: "page", url: "app://-/avatar-overlay-composition-surface.html?surfaceId=activity-slot-0", webSocketDebuggerUrl: "ws://slot" },
+    { type: "page", url: "app://-/index.html", webSocketDebuggerUrl: "ws://main" }
+  ]);
+
+  assert.equal(target?.webSocketDebuggerUrl, "ws://main");
+});
+
+test("renderer bridge rejects auxiliary-only renderer lists", () => {
+  const target = selectCodexMainTarget([
+    { type: "page", url: "app://-/avatar-overlay-composition-surface.html?surfaceId=mascot-badge", webSocketDebuggerUrl: "ws://mascot" }
+  ]);
+
+  assert.equal(target, undefined);
+});
+
+test("renderer evaluations retain their awaited promise until CDP has collected the result", () => {
+  const expression = retainEvaluationPromise("(async () => true)()", 17);
+  assert.match(expression, /__codexDeckPendingEvaluations/);
+  assert.match(expression, /codex-deck-17/);
+  assert.match(expression, /Promise\.resolve/);
+  assert.match(expression, /setTimeout\(\(\) => store\.delete/);
+  const namespaced = retainEvaluationPromise("Promise.resolve(true)", "bridge-a-1");
+  assert.match(namespaced, /codex-deck-bridge-a-1/);
 });
 
 test("reasoning controls use the official native composer commands", async () => {

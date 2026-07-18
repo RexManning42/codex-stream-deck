@@ -24,6 +24,8 @@ export class CodexRelayServer {
   private poll?: NodeJS.Timeout;
   private snapshotInFlight?: Promise<RelaySnapshotMessage>;
   private readonly authenticated = new Set<WebSocket>();
+  private lastSnapshotError = "";
+  private lastSnapshotErrorAt = 0;
 
   constructor(
     private readonly config: RelayServerConfig,
@@ -74,10 +76,12 @@ export class CodexRelayServer {
       }
       this.authenticated.add(socket);
       socket.send(JSON.stringify({ type: "ready", protocol: RELAY_PROTOCOL_VERSION, host: this.host }));
-      socket.on("message", (message) => void this.handleMessage(socket, message.toString()));
+      socket.on("message", (message) => {
+        void this.handleMessage(socket, message.toString()).catch((error) => this.reportSnapshotError(error));
+      });
       socket.on("close", () => this.authenticated.delete(socket));
       socket.on("error", () => this.authenticated.delete(socket));
-      void this.publishSnapshot(socket);
+      void this.publishSnapshot(socket).catch((error) => this.reportSnapshotError(error));
     });
     socket.on("close", () => clearTimeout(authTimer));
   }
@@ -109,13 +113,24 @@ export class CodexRelayServer {
     if (!this.server) return;
     this.poll = setTimeout(async () => {
       try { if (this.authenticated.size) await this.publishSnapshot(); }
-      catch (error) { this.log(`Relay snapshot failed: ${String(error)}`); }
+      catch (error) { this.reportSnapshotError(error); }
       finally { this.scheduleSnapshot(); }
     }, delay);
   }
 
+  private reportSnapshotError(error: unknown): void {
+    const message = String(error);
+    const now = Date.now();
+    if (message === this.lastSnapshotError && now - this.lastSnapshotErrorAt < 60_000) return;
+    this.lastSnapshotError = message;
+    this.lastSnapshotErrorAt = now;
+    this.log(`Relay snapshot unavailable: ${message}`);
+  }
+
   private async publishSnapshot(only?: WebSocket): Promise<void> {
     const message = await this.currentSnapshotMessage();
+    this.lastSnapshotError = "";
+    this.lastSnapshotErrorAt = 0;
     const encoded = JSON.stringify(message);
     for (const socket of only ? [only] : this.authenticated) {
       if (socket.readyState === WebSocket.OPEN) socket.send(encoded);

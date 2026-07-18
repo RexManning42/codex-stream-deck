@@ -30,6 +30,28 @@ test("rollout and prefixed thread identities use the same UUID", () => {
   assert.equal(sessionIdFromThreadKey("local:../../secret"), null);
 });
 
+test("recent local rollout tails expose structural working and completion state without task contents", async () => {
+  const root = await mkdtemp(join(tmpdir(), "codex-deck-presence-"));
+  try {
+    const activeId = "10000000-0000-4000-8000-000000000001";
+    const completeId = "10000000-0000-4000-8000-000000000002";
+    await writeFile(join(root, `rollout-now-${activeId}.jsonl`), '{"type":"event_msg","payload":{"type":"agent_reasoning"}}\n');
+    await writeFile(join(root, `rollout-now-${completeId}.jsonl`), '{"type":"event_msg","payload":{"type":"agent_reasoning"}}\n{"type":"event_msg","payload":{"type":"task_complete"}}\n');
+    const annotated = await new CodexSessionOwnershipIndex([root], 60_000).annotate(snapshot());
+    const states = new Map(annotated.hostSessions?.map((session) => [session.threadId, session.status]));
+    assert.equal(states.get(activeId), "working");
+    assert.equal(states.get(completeId), "complete");
+    const index = new CodexSessionOwnershipIndex([root], 60_000);
+    const beforeOpen = await index.annotate(snapshot());
+    assert.equal(beforeOpen.hostSessions?.find((session) => session.threadId === completeId)?.status, "complete");
+    index.markOpened(`local:${completeId}`);
+    const afterOpen = await index.annotate(snapshot());
+    assert.equal(afterOpen.hostSessions?.find((session) => session.threadId === completeId)?.status, "idle");
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 function snapshot(): MicroSnapshot {
   return {
     slots: Array.from({ length: 6 }, (_, id) => ({

@@ -4,7 +4,7 @@ import { readFile } from "node:fs/promises";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
-import { buildRuntimeOverrideExpression, buildRuntimeVerificationExpression } from "../launcher/runtime-override.js";
+import { buildRuntimeOverrideExpression, buildRuntimeVerificationExpression, selectRuntimeTarget } from "../launcher/runtime-override.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -17,6 +17,16 @@ test("launcher discovers the persisted-signal module without a build hash", () =
 
 test("launcher rejects an unsafe feature-gate expression", () => {
   assert.throws(() => buildRuntimeOverrideExpression("1);alert(1)//"), /digits only/);
+});
+
+test("runtime override targets the main renderer instead of macOS avatar surfaces", () => {
+  const target = selectRuntimeTarget([
+    { type: "page", url: "app://-/index.html?initialRoute=%2Favatar-overlay", webSocketDebuggerUrl: "ws://route" },
+    { type: "page", url: "app://-/avatar-overlay-composition-surface.html?surfaceId=mascot-badge", webSocketDebuggerUrl: "ws://mascot" },
+    { type: "page", url: "app://-/index.html", webSocketDebuggerUrl: "ws://main" }
+  ]);
+
+  assert.equal(target?.webSocketDebuggerUrl, "ws://main");
 });
 
 test("startup monitoring survives Codex updates without duplicate watchers", async () => {

@@ -1,6 +1,6 @@
 import { OFFICIAL_KEYCAP_IDS, type OfficialKeycapId } from "./keycaps.js";
 import type {
-  CodexHost, MicroActionSlot, MicroDirection, MicroSnapshot, ReasoningAdjustment, RoutedAgentSlot
+  CodexHost, HostSessionPresence, MicroActionSlot, MicroDirection, MicroSnapshot, ReasoningAdjustment, RoutedAgentSlot
 } from "./types.js";
 
 export const RELAY_PROTOCOL_VERSION = 1;
@@ -29,16 +29,17 @@ export type RelayServerMessage = RelayReadyMessage | RelaySnapshotMessage | Rela
 export type HostSnapshot = { host: CodexHost; snapshot: MicroSnapshot; observedAt: number };
 
 type ActivityRecord = { activityAt: number; signature: string; lastSeenAt: number };
+type SessionOwner = { input: HostSnapshot; session: HostSessionPresence };
 
 export class HostActivityIndex {
   private readonly activity = new Map<string, ActivityRecord>();
 
-  merge(inputs: HostSnapshot[], now = Date.now()): RoutedAgentSlot[] {
+  merge(inputs: HostSnapshot[], now = Date.now(), authoritativeHostId?: string): RoutedAgentSlot[] {
     const routed: RoutedAgentSlot[] = [];
     for (const input of inputs) {
       for (const slot of input.snapshot.slots) {
         if (!slot.threadKey) continue;
-        const key = `${input.host.hostId}:${slot.threadKey}`;
+        const key = `${input.host.hostId}:${threadIdentity(slot.threadKey)}`;
         const signature = `${slot.status}:${slot.selected}:${slot.title ?? ""}`;
         const prior = this.activity.get(key);
         const explicit = validTimestamp(slot.activityAt);
@@ -57,17 +58,103 @@ export class HostActivityIndex {
     for (const [key, value] of this.activity) {
       if (now - value.lastSeenAt > 86_400_000) this.activity.delete(key);
     }
+    if (inputs.length === 0) return [];
+    if (inputs.length === 1) return nativeSlotOrder(inputs[0]!, routed);
+
     const mirrors = new Map<string, RoutedAgentSlot[]>();
     for (const slot of routed) {
-      const candidates = mirrors.get(slot.threadKey!) ?? [];
+      const identity = threadIdentity(slot.threadKey!);
+      const candidates = mirrors.get(identity) ?? [];
       candidates.push(slot);
-      mirrors.set(slot.threadKey!, candidates);
+      mirrors.set(identity, candidates);
     }
-    return [...mirrors.values()].map(mergeMirrors)
-      .sort(compareActivity)
+    const sessionOwners = sessionOwnerIndex(inputs);
+    const merged = [...mirrors.entries()].map(([identity, candidates]) => mergeMirrors(candidates, sessionOwners.get(identity)));
+    const byThread = new Map(merged.map((slot) => [threadIdentity(slot.threadKey!), slot]));
+    const authority = inputs.find((input) => input.host.hostId === authoritativeHostId) ?? inputs[0]!;
+
+    if (authority.snapshot.agentSource === "pinned") return pinnedSlotOrder(authority, inputs, byThread);
+    if (authority.snapshot.agentSource === "custom") return customSlotOrder(authority, inputs, byThread);
+    return merged
+      .sort(authority.snapshot.agentSource === "priority" ? comparePriority : compareActivity)
       .slice(0, 6)
       .map((slot, id) => ({ ...slot, id }));
   }
+}
+
+function nativeSlotOrder(input: HostSnapshot, routed: RoutedAgentSlot[]): RoutedAgentSlot[] {
+  const bySourceSlot = new Map(
+    routed.filter((candidate) => candidate.host.hostId === input.host.hostId)
+      .map((candidate) => [candidate.sourceSlot, candidate])
+  );
+  return input.snapshot.slots.map((slot, id) => {
+    const candidate = bySourceSlot.get(slot.id);
+    return candidate ? { ...candidate, id } : emptyRoutedSlot(input, slot, id);
+  });
+}
+
+function pinnedSlotOrder(
+  authority: HostSnapshot,
+  inputs: HostSnapshot[],
+  byThread: Map<string, RoutedAgentSlot>
+): RoutedAgentSlot[] {
+  const sources = [
+    authority,
+    ...inputs.filter((input) => input.host.hostId !== authority.host.hostId && input.snapshot.agentSource === "pinned")
+  ];
+  const result: RoutedAgentSlot[] = [];
+  const used = new Set<string>();
+  for (let sourceSlot = 0; sourceSlot < 6 && result.length < 6; sourceSlot += 1) {
+    for (const source of sources) {
+      const slot = source.snapshot.slots[sourceSlot];
+      if (!slot?.threadKey) continue;
+      const identity = threadIdentity(slot.threadKey);
+      if (used.has(identity)) continue;
+      used.add(identity);
+      const routed = byThread.get(identity);
+      if (routed) result.push({ ...routed, id: result.length });
+      if (result.length === 6) break;
+    }
+  }
+  while (result.length < 6) result.push(emptyRoutedPosition(authority, result.length));
+  return result;
+}
+
+function customSlotOrder(
+  authority: HostSnapshot,
+  inputs: HostSnapshot[],
+  byThread: Map<string, RoutedAgentSlot>
+): RoutedAgentSlot[] {
+  const remoteSources = inputs.filter((input) =>
+    input.host.hostId !== authority.host.hostId && input.snapshot.agentSource === "custom"
+  );
+  const used = new Set<string>();
+  return authority.snapshot.slots.map((localSlot, id) => {
+    const candidates = [
+      { source: authority, slot: localSlot },
+      ...remoteSources.map((source) => ({ source, slot: source.snapshot.slots[id]! }))
+    ];
+    for (const candidate of candidates) {
+      if (!candidate.slot?.threadKey) continue;
+      const identity = threadIdentity(candidate.slot.threadKey);
+      if (used.has(identity)) continue;
+      used.add(identity);
+      const routed = byThread.get(identity);
+      return routed ? { ...routed, id } : emptyRoutedSlot(candidate.source, candidate.slot, id);
+    }
+    return emptyRoutedPosition(authority, id);
+  });
+}
+
+function emptyRoutedSlot(input: HostSnapshot, slot: MicroSnapshot["slots"][number], id: number): RoutedAgentSlot {
+  return { ...slot, id, host: input.host, sourceSlot: slot.id, observedAt: input.observedAt };
+}
+
+function emptyRoutedPosition(input: HostSnapshot, id: number): RoutedAgentSlot {
+  return {
+    id, threadKey: null, title: null, status: "off", selected: false,
+    host: input.host, sourceSlot: id, observedAt: input.observedAt
+  };
 }
 
 export function parseRelayServerMessage(value: unknown): RelayServerMessage | null {
@@ -95,7 +182,12 @@ export function parseRelayCommand(value: unknown): RelayCommand | null {
 
 function isSnapshot(value: unknown): value is MicroSnapshot {
   if (!isRecord(value) || !Array.isArray(value.slots) || value.slots.length !== 6 || !isRecord(value.layout)) return false;
-  return value.slots.every((slot, index) => isRecord(slot) && slot.id === index && typeof slot.status === "string");
+  if (!value.slots.every((slot, index) => isRecord(slot) && slot.id === index && typeof slot.status === "string")) return false;
+  if (value.hostSessions == null) return true;
+  return Array.isArray(value.hostSessions) && value.hostSessions.length <= 128 && value.hostSessions.every((session) =>
+    isRecord(session) && isThreadKey(session.threadId) && validTimestamp(session.activityAt) != null &&
+    ["idle", "working", "complete"].includes(String(session.status))
+  );
 }
 
 function isHost(value: unknown): value is CodexHost {
@@ -123,10 +215,14 @@ function compareOwnership(left: RoutedAgentSlot, right: RoutedAgentSlot): number
   return compareActivity(left, right);
 }
 
-function mergeMirrors(candidates: RoutedAgentSlot[]): RoutedAgentSlot {
+function mergeMirrors(candidates: RoutedAgentSlot[], sessionOwner?: SessionOwner): RoutedAgentSlot {
   let owner = candidates[0]!;
-  for (const candidate of candidates.slice(1)) {
-    if (compareOwnership(candidate, owner) < 0) owner = candidate;
+  const explicitOwner = sessionOwner && candidates.find((candidate) => candidate.host.hostId === sessionOwner.input.host.hostId);
+  if (explicitOwner) owner = explicitOwner;
+  else {
+    for (const candidate of candidates.slice(1)) {
+      if (compareOwnership(candidate, owner) < 0) owner = candidate;
+    }
   }
   const strongest = [...candidates].sort((left, right) =>
     mirrorStatusPriority(right.status) - mirrorStatusPriority(left.status) ||
@@ -134,17 +230,36 @@ function mergeMirrors(candidates: RoutedAgentSlot[]): RoutedAgentSlot {
   )[0]!;
   const ownedCandidates = candidates.filter((candidate) => candidate.ownedByHost === true);
   const recencyCandidates = ownedCandidates.length ? ownedCandidates : candidates;
+  const sessionStatus = sessionOwner?.session.status;
+  const status = sessionStatus && sessionStatus !== "idle" && !["approval", "awaiting-approval", "awaiting-response", "unread", "error"].includes(strongest.status)
+    ? sessionStatus
+    : strongest.status;
+  const routedOwner = sessionOwner?.input.host ?? owner.host;
   return {
     ...owner,
-    status: strongest.status,
+    host: routedOwner,
+    ownedByHost: sessionOwner ? true : owner.ownedByHost,
+    status,
     selected: candidates.some((candidate) => candidate.selected),
     // A delayed status update in a cloud/SSH mirror must not make the task look
     // newly active or cause two simultaneously working keys to swap places.
     // Status and selection remain aggregated, but recency follows the backing
     // rollout owner whenever ownership is known.
-    activityAt: Math.max(...recencyCandidates.map((candidate) => candidate.activityAt ?? 0)),
+    activityAt: Math.max(sessionOwner?.session.activityAt ?? 0, ...recencyCandidates.map((candidate) => candidate.activityAt ?? 0)),
     observedAt: Math.max(...candidates.map((candidate) => candidate.observedAt))
   };
+}
+
+function sessionOwnerIndex(inputs: HostSnapshot[]): Map<string, SessionOwner> {
+  const owners = new Map<string, SessionOwner>();
+  for (const input of inputs) {
+    for (const session of input.snapshot.hostSessions ?? []) {
+      const identity = threadIdentity(session.threadId);
+      const prior = owners.get(identity);
+      if (!prior || session.activityAt > prior.session.activityAt) owners.set(identity, { input, session });
+    }
+  }
+  return owners;
 }
 
 function compareActivity(left: RoutedAgentSlot, right: RoutedAgentSlot): number {
@@ -154,9 +269,24 @@ function compareActivity(left: RoutedAgentSlot, right: RoutedAgentSlot): number 
   return (right.activityAt ?? 0) - (left.activityAt ?? 0) || left.sourceSlot - right.sourceSlot;
 }
 
+function comparePriority(left: RoutedAgentSlot, right: RoutedAgentSlot): number {
+  return priorityModeStatus(right.status) - priorityModeStatus(left.status) ||
+    Number(right.selected) - Number(left.selected) ||
+    (right.activityAt ?? 0) - (left.activityAt ?? 0) ||
+    left.sourceSlot - right.sourceSlot;
+}
+
+function priorityModeStatus(status: string): number {
+  if (["approval", "awaiting-approval", "awaiting-response"].includes(status)) return 4;
+  if (["unread", "error", "complete", "completed", "done"].includes(status)) return 3;
+  if (["working", "thinking"].includes(status)) return 2;
+  if (status === "idle") return 1;
+  return 0;
+}
+
 function hostStatusPriority(status: string): number {
   if (["working", "thinking", "approval", "awaiting-approval", "awaiting-response"].includes(status)) return 3;
-  if (["unread", "error"].includes(status)) return 2;
+  if (["unread", "error", "complete", "completed", "done"].includes(status)) return 2;
   if (status === "idle") return 1;
   return 0;
 }
@@ -169,5 +299,9 @@ function mirrorStatusPriority(status: string): number {
   return 0;
 }
 function isThreadKey(value: unknown): value is string {
-  return typeof value === "string" && /^(?:[a-z][a-z0-9_-]{0,15}:)?[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value);
+  return typeof value === "string" && /^(?:[a-z][a-z0-9_-]{0,31}:){0,3}[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value);
+}
+
+function threadIdentity(value: string): string {
+  return value.match(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i)?.[0]?.toLowerCase() ?? value;
 }

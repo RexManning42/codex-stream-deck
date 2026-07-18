@@ -43,6 +43,7 @@ test("LaunchAgent uses a dynamic Node resolver instead of pinning an NVM version
   assert.match(launcher, /Node\.js 20 or newer/);
   assert.match(plist, /<string>\/bin\/zsh<\/string>/);
   assert.match(plist, /watcher-launch\.sh/);
+  assert.match(plist, /watcher\.stderr\.log/);
   assert.doesNotMatch(plist, /\.nvm\/versions\/node\/v\d/);
 });
 

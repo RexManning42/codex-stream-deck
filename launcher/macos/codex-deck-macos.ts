@@ -25,6 +25,7 @@ const BRIDGE_STATE_PATH = join(STATE_ROOT, "codex-micro-bridge.json");
 const HOST_STATE_PATH = join(STATE_ROOT, "host.json");
 const WATCHER_STATE_PATH = join(STATE_ROOT, "watcher-state.json");
 const WATCHER_LOG_PATH = join(STATE_ROOT, "watcher.log");
+const WATCHER_STDERR_PATH = join(STATE_ROOT, "watcher.stderr.log");
 const WATCHER_LOCK_PATH = join(STATE_ROOT, "watcher.lock");
 const RELAY_SERVER_CONFIG_PATH = join(STATE_ROOT, "relay-server.json");
 const INSTALLED_RUNTIME_PATH = join(STATE_ROOT, "codex-deck-macos.mjs");
@@ -340,6 +341,12 @@ async function log(message: string): Promise<void> {
   finally { await file.close(); }
 }
 
+function safeLog(message: string): void {
+  void log(message).catch((error) => {
+    console.error(`${new Date().toISOString()} [${process.pid}] Watcher logging failed: ${String(error)}`);
+  });
+}
+
 export async function acquirePidLock(lockPath = WATCHER_LOCK_PATH): Promise<(() => Promise<void>) | null> {
   await mkdir(dirname(lockPath), { recursive: true, mode: 0o700 });
   try {
@@ -376,8 +383,9 @@ async function runWatcher(): Promise<number> {
     relayControl?.close();
     if (!released) { released = true; await release(); }
   };
-  process.once("SIGTERM", () => { void cleanup().finally(() => process.exit(0)); });
-  process.once("SIGINT", () => { void cleanup().finally(() => process.exit(0)); });
+  process.once("SIGTERM", () => { safeLog("Watcher received SIGTERM."); void cleanup().finally(() => process.exit(0)); });
+  process.once("SIGINT", () => { safeLog("Watcher received SIGINT."); void cleanup().finally(() => process.exit(0)); });
+  process.on("unhandledRejection", (reason) => { safeLog(`Unhandled watcher rejection: ${String(reason)}`); });
 
   await log("Watcher started.");
   let policy = resumeWatcherPolicyState(await readJson<WatcherPolicyState>(WATCHER_STATE_PATH));
@@ -404,12 +412,12 @@ async function runWatcher(): Promise<number> {
           relaySignature = "";
           if (relayConfig?.enabled) {
             const identity = await hostState();
-            relayControl = new CodexMicroRendererBridge((message) => { void log(message); });
+            relayControl = new CodexMicroRendererBridge(safeLog);
             relayServer = new CodexRelayServer(
               relayConfig,
               { ...identity, platform: "darwin" },
               relayControl,
-              (message) => { void log(message); }
+              safeLog
             );
             await relayServer.start();
           }
@@ -426,11 +434,7 @@ async function runWatcher(): Promise<number> {
         } else {
           enabledSignature = "";
           await removeStaleBridgeState(null, log);
-          if (decision.action.type === "launch-bridge") {
-            const selectedPort = await chooseLoopbackPort();
-            await log(`Starting Codex with a loopback bridge (${decision.action.reason}).`);
-            await launchCodex(installation, selectedPort);
-          } else if (decision.action.type === "restart-for-recovery" && main) {
+          if (decision.action.type === "restart-for-recovery" && main) {
             await log(`Recovering Codex bridge once for generation ${main.generation} (${decision.action.reason}).`);
             await terminateCodex(main);
             const refreshed = await discoverCodexInstallation();
@@ -499,7 +503,7 @@ export function buildLaunchAgentPlist(watcherLauncherPath = WATCHER_LAUNCHER_PAT
   <key>StandardOutPath</key>
   <string>/dev/null</string>
   <key>StandardErrorPath</key>
-  <string>/dev/null</string>
+  <string>${xml(WATCHER_STDERR_PATH)}</string>
 </dict>
 </plist>
 `;
@@ -539,7 +543,7 @@ async function installLaunchAgent(): Promise<void> {
 async function uninstallLaunchAgent(): Promise<void> {
   run("/bin/launchctl", ["bootout", `gui/${currentUserId()}`, LAUNCH_AGENT_PATH], { allowFailure: true });
   await rm(LAUNCH_AGENT_PATH, { force: true });
-  for (const path of [INSTALLED_RUNTIME_PATH, WATCHER_LAUNCHER_PATH, BRIDGE_STATE_PATH, WATCHER_STATE_PATH, WATCHER_LOG_PATH, `${WATCHER_LOG_PATH}.1`, `${WATCHER_LOG_PATH}.2`, `${WATCHER_LOG_PATH}.3`]) {
+  for (const path of [INSTALLED_RUNTIME_PATH, WATCHER_LAUNCHER_PATH, BRIDGE_STATE_PATH, WATCHER_STATE_PATH, WATCHER_LOG_PATH, `${WATCHER_LOG_PATH}.1`, `${WATCHER_LOG_PATH}.2`, `${WATCHER_LOG_PATH}.3`, WATCHER_STDERR_PATH]) {
     await rm(path, { force: true });
   }
   await rm(WATCHER_LOCK_PATH, { recursive: true, force: true });
@@ -619,22 +623,28 @@ async function selfTest(): Promise<void> {
   assert.equal(result.action.type, "preserve-initial-session", "same initial process is never restarted");
 
   result = evaluateWatcherPolicy(state, { now: 10_001, generation: "B", bridgeHealthy: false });
-  assert.equal(result.action.type, "restart-for-recovery", "rapid main-process replacement is detected");
+  assert.equal(result.action.type, "wait", "a new process must remain stable before recovery");
   state = result.state;
-  result = evaluateWatcherPolicy(state, { now: 41_000, generation: "B", bridgeHealthy: false });
-  assert.equal(result.action.type, "wait", "the same generation is not restarted repeatedly");
+  result = evaluateWatcherPolicy(state, { now: 30_001, generation: "B", bridgeHealthy: false });
+  assert.equal(result.action.type, "restart-for-recovery", "a stable new process can be recovered once");
+  state = result.state;
+  result = evaluateWatcherPolicy(state, { now: 61_000, generation: "C", bridgeHealthy: false });
+  assert.equal(result.action.type, "wait", "the global circuit breaker blocks a new-generation restart loop");
 
   state = createWatcherPolicyState(0);
   result = evaluateWatcherPolicy(state, { now: 0, generation: null, bridgeHealthy: false });
   state = result.state;
   result = evaluateWatcherPolicy(state, { now: 8_000, generation: null, bridgeHealthy: false });
-  assert.equal(result.action.type, "launch-bridge", "an observed stopped interval triggers recovery");
+  assert.equal(result.action.type, "wait", "the watcher never launches Codex while it is closed");
 
   state = createWatcherPolicyState(0);
   result = evaluateWatcherPolicy(state, { now: 0, generation: "A", bridgeHealthy: true });
   state = result.state;
   result = evaluateWatcherPolicy(state, { now: 10_000, generation: "B", bridgeHealthy: false });
-  assert.equal(result.action.type, "restart-for-recovery", "a previous healthy bridge recovers after replacement/update");
+  assert.equal(result.action.type, "wait", "a replacement process must remain stable before recovery");
+  state = result.state;
+  result = evaluateWatcherPolicy(state, { now: 30_000, generation: "B", bridgeHealthy: false });
+  assert.equal(result.action.type, "restart-for-recovery", "a previous healthy bridge recovers after a stable replacement");
 
   state = createWatcherPolicyState(0);
   result = evaluateWatcherPolicy(state, { now: 0, generation: null, bridgeHealthy: false });
@@ -660,7 +670,7 @@ async function selfTest(): Promise<void> {
 
   assert.equal(isBridgeStateStale(70_000, null), true, "stale/invalid port state is rejected");
   assert.equal(isBridgeStateStale(43123, 43123), false, "the active bridge state is retained");
-  console.log("macOS self-test passed: 8 recovery, race, stale-state, and single-instance scenarios.");
+  console.log("macOS self-test passed: safe recovery, circuit-breaker, race, stale-state, and single-instance scenarios.");
 }
 
 async function main(): Promise<number> {

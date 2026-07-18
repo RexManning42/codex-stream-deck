@@ -22,12 +22,20 @@ export type MicroLayout = {
   analogStick: Record<MicroDirection, unknown>;
 };
 
+export type HostSessionPresence = {
+  threadId: string;
+  activityAt: number;
+  status: "idle" | "working" | "complete";
+};
+
 export type MicroSnapshot = {
   slots: MicroAgentSlot[];
   layout: MicroLayout;
   agentSource: "pinned" | "recent" | "priority" | "custom";
   lightingAutoOff: string;
   theme: ThemeMode;
+  /** Recent local rollout identities used to disambiguate cross-host mirrors. */
+  hostSessions?: HostSessionPresence[];
 };
 
 export type CodexHost = {

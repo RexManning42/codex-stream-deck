@@ -45,11 +45,15 @@ Other 15-key Stream Deck models may work, but have not been verified yet.
 5. Open **Codex Settings > Codex Micro** and choose the agent source, action assignments, joystick actions, and encoder behavior you want.
 6. In Stream Deck, drag the Codex Deck actions onto your keys using the layout below.
 
-Use **Start Codex Deck.cmd** whenever you want to use the bridge. You do not need to restart an already launcher-started Codex session; after a normal Codex restart, run the launcher again.
+Without the optional watcher, use **Start Codex Deck.cmd** whenever you want to use the bridge. You do not need to restart an already launcher-started Codex session.
 
-To remove that manual step, run `Start-CodexDeck.ps1 -InstallStartup` once.
-This creates a hidden shortcut in the Windows Startup folder and starts Codex
-with the bridge after you sign in. Remove it with `-UninstallStartup`.
+To remove that manual step permanently, run `Start-CodexDeck.ps1 -InstallStartup` once.
+This installs a single hidden watcher that stays active after Windows sign-in,
+tracks Codex across app updates and restarts, removes stale bridge ports, and
+automatically restores the bridge when Codex launches again. Installing it
+does not restart a normal Codex session that is already open; that session is
+picked up after its next normal close and reopen. Remove the watcher with
+`-UninstallStartup`.
 
 ## Recommended 15-key layout
 
@@ -117,6 +121,7 @@ See [Architecture and security](docs/ARCHITECTURE.md) for the full boundary.
 - The public runtime does not read Codex task databases, rollout files, or desktop logs.
 - Local icon SVGs are read only from `%LOCALAPPDATA%\CodexDeck\icons`.
 - Closing the launcher-started Codex session closes the debug endpoint.
+- The optional watcher remains local, single-instance, and records only bounded diagnostics in `%LOCALAPPDATA%\CodexDeck\watcher.log`.
 
 Do not use the launcher on a machine where you run untrusted local software. See [SECURITY.md](SECURITY.md) before reporting a vulnerability.
 

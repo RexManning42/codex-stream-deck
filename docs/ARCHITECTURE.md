@@ -15,6 +15,20 @@ The bundled runtime helper connects to that renderer and enables the Micro featu
 
 The launcher does not edit the Codex installation, Codex LevelDB, task database, rollout files, or logs.
 
+When startup monitoring is installed, `Watch-CodexDeck.ps1` remains active as
+a single hidden PowerShell process. It dynamically resolves the newest Codex
+Microsoft Store package on every check, so an app update can change the install
+path without invalidating the watcher. A named mutex prevents duplicates.
+
+The watcher follows three safety rules:
+
+1. A healthy debug-enabled Codex session is reused and never restarted.
+2. A normal session that was already open when monitoring was installed is left untouched until its next normal restart.
+3. A later Codex launch, update restart, or crash recovery without the required loopback port receives at most one recovery restart for that process generation.
+
+Stale port metadata is removed automatically. The bounded watcher log lives at
+`%LOCALAPPDATA%\CodexDeck\watcher.log`.
+
 ### Stream Deck plugin
 
 The plugin discovers the loopback port from the state file or from the command line of a running Codex process. It then uses Chrome DevTools Protocol `Runtime.evaluate` calls to:

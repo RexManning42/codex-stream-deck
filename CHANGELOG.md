@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.5.1 - Unreleased
+
+- Replaced the one-shot Windows-login launcher with a persistent, single-instance bridge watcher.
+- Automatically recovers the bridge after Codex updates, crashes, and normal restarts.
+- Detects rapid Codex restarts by main-process generation even when no stopped interval is observed.
+- Avoids touching a normal Codex session that was already open when the watcher is first installed.
+- Removes stale bridge-port files and records bounded diagnostics in `%LOCALAPPDATA%\CodexDeck\watcher.log`.
+
 ## 0.5.0 - 2026-07-17
 
 - The launcher reuses a healthy existing loopback debug session instead of restarting Codex on every run.

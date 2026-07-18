@@ -4,7 +4,9 @@
 
 - You can safely run the launcher again while a launcher-started Codex session is open; it now reuses the existing debug session instead of restarting Codex.
 - Use `Start-CodexDeck.ps1 -ForceRestart` only when you explicitly want to restart Codex.
-- To start it automatically after Windows sign-in, run `Start-CodexDeck.ps1 -InstallStartup` once. Remove that behavior with `-UninstallStartup`.
+- To keep it available across Windows sign-in, Codex restarts, and Codex app updates, run `Start-CodexDeck.ps1 -InstallStartup` once. This installs a persistent single-instance watcher. Remove it with `-UninstallStartup`.
+- Installing monitoring leaves an already-open normal Codex session untouched. Close and reopen Codex once, or run the launcher manually when you are ready for that one recovery restart.
+- Watcher diagnostics are stored in `%LOCALAPPDATA%\CodexDeck\watcher.log` and rotate automatically.
 - Close all Codex windows.
 - Start Codex with `Start Codex Deck.cmd`.
 - Keep the launcher folder intact; `runtime-override.mjs` must remain next to the PowerShell script.

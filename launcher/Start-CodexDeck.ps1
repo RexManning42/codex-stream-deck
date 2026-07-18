@@ -15,17 +15,37 @@ function Get-StartupShortcutPath {
   Join-Path ([Environment]::GetFolderPath('Startup')) 'Codex Deck.lnk'
 }
 
+function Get-WatcherStopPath {
+  Join-Path (Join-Path $env:LOCALAPPDATA 'CodexDeck') 'watcher.stop'
+}
+
+function Start-BridgeWatcher {
+  $watcherPath = Join-Path $PSScriptRoot 'Watch-CodexDeck.ps1'
+  if (-not (Test-Path -LiteralPath $watcherPath)) { throw "Codex Deck watcher not found: $watcherPath" }
+  $powerShellPath = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
+  Start-Process -FilePath $powerShellPath -WindowStyle Hidden -ArgumentList @(
+    '-NoLogo', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-WindowStyle', 'Hidden', '-File', "`"$watcherPath`""
+  )
+}
+
 function Set-StartupShortcut {
   $shortcutPath = Get-StartupShortcutPath
+  $watcherPath = Join-Path $PSScriptRoot 'Watch-CodexDeck.ps1'
+  if (-not (Test-Path -LiteralPath $watcherPath)) { throw "Codex Deck watcher not found: $watcherPath" }
+  $stopPath = Get-WatcherStopPath
+  New-Item -ItemType Directory -Force -Path (Split-Path -Parent $stopPath) | Out-Null
+  Remove-Item -LiteralPath $stopPath -Force -ErrorAction SilentlyContinue
   $shell = New-Object -ComObject WScript.Shell
   $shortcut = $shell.CreateShortcut($shortcutPath)
   $shortcut.TargetPath = (Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe')
-  $shortcut.Arguments = "-NoLogo -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$PSCommandPath`""
+  $shortcut.Arguments = "-NoLogo -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$watcherPath`" -RecoverExistingSession"
   $shortcut.WorkingDirectory = $PSScriptRoot
-  $shortcut.Description = 'Start Codex Deck bridge at Windows sign-in'
+  $shortcut.Description = 'Keep the Codex Deck bridge available while Codex is running'
   $shortcut.IconLocation = "$env:SystemRoot\System32\shell32.dll,44"
   $shortcut.Save()
+  Start-BridgeWatcher
   Write-Host "Startup shortcut installed: $shortcutPath"
+  Write-Host 'The background watcher is running. An existing normal Codex session was not restarted.'
 }
 
 if ($InstallStartup) {
@@ -35,6 +55,9 @@ if ($InstallStartup) {
 
 if ($UninstallStartup) {
   $shortcutPath = Get-StartupShortcutPath
+  $stopPath = Get-WatcherStopPath
+  New-Item -ItemType Directory -Force -Path (Split-Path -Parent $stopPath) | Out-Null
+  [IO.File]::WriteAllText($stopPath, [DateTimeOffset]::UtcNow.ToString('o'), [Text.UTF8Encoding]::new($false))
   if (Test-Path -LiteralPath $shortcutPath) {
     Remove-Item -LiteralPath $shortcutPath -Force
     Write-Host "Startup shortcut removed: $shortcutPath"

@@ -189,7 +189,7 @@ export class DeckController {
     if (this.localHost && this.targetPlatform !== this.localHost.platform && remoteSnapshot) this.targetHostId = remoteSnapshot.host.hostId;
     else if (this.localHost && this.targetPlatform === this.localHost.platform) this.targetHostId = this.localHost.hostId;
     const inputs = [this.localSnapshot, remoteSnapshot].filter((value): value is HostSnapshot => value != null);
-    this.routedSlots = this.activityIndex.merge(inputs);
+    this.routedSlots = this.activityIndex.merge(inputs, Date.now(), this.localHost?.hostId);
 
     const assignments = this.routedSlots.map((slot) => `${slot.id}=${slot.host.platform}:${slot.threadKey ?? "empty"}`).join(" ");
     if (assignments !== this.lastAssignmentSignature) {

@@ -123,10 +123,10 @@ Do not use the launcher while running untrusted local software. See [SECURITY.md
 
 ## Compatibility
 
-Release 0.6.0 was locally validated against:
+The current build was locally validated against:
 
-- Codex for Windows `26.715.3651.0`
-- Codex for macOS `26.715.31251` (build `5538`)
+- Codex for Windows `26.715.4045.0`
+- Codex for macOS `26.715.31925`
 - Stream Deck `7.4.2.22730`
 - Windows `10.0.26220.0`
 - Node.js `24.13.0`

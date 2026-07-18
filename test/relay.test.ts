@@ -178,6 +178,74 @@ test("the same cloud thread is shown once and owned by its live active host", ()
   assert.equal(afterCompletion?.host.platform, "darwin", "the host that completed the task retains ownership");
 });
 
+test("single-host agent modes preserve Codex's native six-slot order", () => {
+  const pinned = structuredClone(snapshot);
+  pinned.agentSource = "pinned";
+  for (const slot of pinned.slots) {
+    slot.status = "idle";
+    slot.selected = false;
+    slot.activityAt = slot.id;
+  }
+  const merged = new HostActivityIndex().merge([{ host, snapshot: pinned, observedAt: 1_000 }], 1_000, host.hostId);
+  assert.deepEqual(merged.map((slot) => slot.threadKey), pinned.slots.map((slot) => slot.threadKey));
+  assert.deepEqual(merged.map((slot) => slot.id), [0, 1, 2, 3, 4, 5]);
+});
+
+test("combined pinned mode preserves controller order but routes to the owning host", () => {
+  const windows: CodexHost = { hostId: "11111111-1111-4111-8111-111111111111", hostName: "Windows", platform: "win32" };
+  const shared = "20000000-0000-4000-8000-000000000000";
+  const windowsSnapshot = structuredClone(snapshot);
+  const macSnapshot = structuredClone(snapshot);
+  windowsSnapshot.agentSource = "pinned";
+  macSnapshot.agentSource = "pinned";
+  windowsSnapshot.slots[0] = { ...windowsSnapshot.slots[0]!, threadKey: shared, ownedByHost: false };
+  macSnapshot.slots[4] = { ...macSnapshot.slots[4]!, threadKey: shared, ownedByHost: true };
+  const merged = new HostActivityIndex().merge([
+    { host: windows, snapshot: windowsSnapshot, observedAt: 1_000 },
+    { host, snapshot: macSnapshot, observedAt: 1_000 }
+  ], 1_000, windows.hostId);
+  assert.equal(merged[0]!.threadKey, shared);
+  assert.equal(merged[0]!.host.platform, "darwin");
+  assert.equal(merged[0]!.sourceSlot, 4);
+});
+
+test("combined custom mode uses the remote assignment when the controller slot is empty", () => {
+  const windows: CodexHost = { hostId: "11111111-1111-4111-8111-111111111111", hostName: "Windows", platform: "win32" };
+  const windowsSnapshot = structuredClone(snapshot);
+  const macSnapshot = structuredClone(snapshot);
+  windowsSnapshot.agentSource = "custom";
+  macSnapshot.agentSource = "custom";
+  windowsSnapshot.slots[0] = { id: 0, threadKey: null, title: null, status: "off", selected: false };
+  macSnapshot.slots[0] = { ...macSnapshot.slots[0]!, threadKey: "30000000-0000-4000-8000-000000000000", ownedByHost: true };
+  const merged = new HostActivityIndex().merge([
+    { host: windows, snapshot: windowsSnapshot, observedAt: 1_000 },
+    { host, snapshot: macSnapshot, observedAt: 1_000 }
+  ], 1_000, windows.hostId);
+  assert.equal(merged[0]!.threadKey, macSnapshot.slots[0]!.threadKey);
+  assert.equal(merged[0]!.host.platform, "darwin");
+  assert.equal(merged[0]!.sourceSlot, 0);
+});
+
+test("combined priority mode ranks waiting, unread, active, then idle", () => {
+  const windows: CodexHost = { hostId: "11111111-1111-4111-8111-111111111111", hostName: "Windows", platform: "win32" };
+  const windowsSnapshot = structuredClone(snapshot);
+  const macSnapshot = structuredClone(snapshot);
+  windowsSnapshot.agentSource = "priority";
+  for (const slot of [...windowsSnapshot.slots, ...macSnapshot.slots]) {
+    slot.status = "idle";
+    slot.selected = false;
+    slot.activityAt = 1;
+  }
+  macSnapshot.slots[0] = { ...macSnapshot.slots[0]!, threadKey: "40000000-0000-4000-8000-000000000000", status: "working" };
+  macSnapshot.slots[1] = { ...macSnapshot.slots[1]!, threadKey: "40000000-0000-4000-8000-000000000001", status: "unread" };
+  macSnapshot.slots[2] = { ...macSnapshot.slots[2]!, threadKey: "40000000-0000-4000-8000-000000000002", status: "awaiting-approval" };
+  const merged = new HostActivityIndex().merge([
+    { host: windows, snapshot: windowsSnapshot, observedAt: 1_000 },
+    { host, snapshot: macSnapshot, observedAt: 1_000 }
+  ], 1_000, windows.hostId);
+  assert.deepEqual(merged.slice(0, 3).map((slot) => slot.status), ["awaiting-approval", "unread", "working"]);
+});
+
 test("authenticated relay publishes snapshots and dispatches typed commands", async () => {
   const port = await freePort();
   const calls: unknown[] = [];

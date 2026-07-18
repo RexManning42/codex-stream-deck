@@ -33,7 +33,7 @@ type ActivityRecord = { activityAt: number; signature: string; lastSeenAt: numbe
 export class HostActivityIndex {
   private readonly activity = new Map<string, ActivityRecord>();
 
-  merge(inputs: HostSnapshot[], now = Date.now()): RoutedAgentSlot[] {
+  merge(inputs: HostSnapshot[], now = Date.now(), authoritativeHostId?: string): RoutedAgentSlot[] {
     const routed: RoutedAgentSlot[] = [];
     for (const input of inputs) {
       for (const slot of input.snapshot.slots) {
@@ -57,17 +57,66 @@ export class HostActivityIndex {
     for (const [key, value] of this.activity) {
       if (now - value.lastSeenAt > 86_400_000) this.activity.delete(key);
     }
+    if (inputs.length === 0) return [];
+    if (inputs.length === 1) return nativeSlotOrder(inputs[0]!, routed);
+
     const mirrors = new Map<string, RoutedAgentSlot[]>();
     for (const slot of routed) {
       const candidates = mirrors.get(slot.threadKey!) ?? [];
       candidates.push(slot);
       mirrors.set(slot.threadKey!, candidates);
     }
-    return [...mirrors.values()].map(mergeMirrors)
-      .sort(compareActivity)
+    const merged = [...mirrors.values()].map(mergeMirrors);
+    const byThread = new Map(merged.map((slot) => [slot.threadKey!, slot]));
+    const authority = inputs.find((input) => input.host.hostId === authoritativeHostId) ?? inputs[0]!;
+
+    if (authority.snapshot.agentSource === "pinned") return configuredSlotOrder(authority, byThread);
+    if (authority.snapshot.agentSource === "custom") return customSlotOrder(authority, inputs, byThread);
+    return merged
+      .sort(authority.snapshot.agentSource === "priority" ? comparePriority : compareActivity)
       .slice(0, 6)
       .map((slot, id) => ({ ...slot, id }));
   }
+}
+
+function nativeSlotOrder(input: HostSnapshot, routed: RoutedAgentSlot[]): RoutedAgentSlot[] {
+  const bySourceSlot = new Map(
+    routed.filter((candidate) => candidate.host.hostId === input.host.hostId)
+      .map((candidate) => [candidate.sourceSlot, candidate])
+  );
+  return input.snapshot.slots.map((slot, id) => {
+    const candidate = bySourceSlot.get(slot.id);
+    return candidate ? { ...candidate, id } : emptyRoutedSlot(input, slot, id);
+  });
+}
+
+function configuredSlotOrder(authority: HostSnapshot, byThread: Map<string, RoutedAgentSlot>): RoutedAgentSlot[] {
+  return authority.snapshot.slots.map((slot, id) =>
+    slot.threadKey && byThread.has(slot.threadKey)
+      ? { ...byThread.get(slot.threadKey)!, id }
+      : emptyRoutedSlot(authority, slot, id)
+  );
+}
+
+function customSlotOrder(
+  authority: HostSnapshot,
+  inputs: HostSnapshot[],
+  byThread: Map<string, RoutedAgentSlot>
+): RoutedAgentSlot[] {
+  return authority.snapshot.slots.map((localSlot, id) => {
+    const fallback = inputs.find((input) =>
+      input.host.hostId !== authority.host.hostId && input.snapshot.agentSource === "custom" && input.snapshot.slots[id]?.threadKey
+    );
+    const source = localSlot.threadKey ? authority : fallback ?? authority;
+    const slot = localSlot.threadKey ? localSlot : fallback?.snapshot.slots[id] ?? localSlot;
+    return slot.threadKey && byThread.has(slot.threadKey)
+      ? { ...byThread.get(slot.threadKey)!, id }
+      : emptyRoutedSlot(source, slot, id);
+  });
+}
+
+function emptyRoutedSlot(input: HostSnapshot, slot: MicroSnapshot["slots"][number], id: number): RoutedAgentSlot {
+  return { ...slot, id, host: input.host, sourceSlot: slot.id, observedAt: input.observedAt };
 }
 
 export function parseRelayServerMessage(value: unknown): RelayServerMessage | null {
@@ -152,6 +201,21 @@ function compareActivity(left: RoutedAgentSlot, right: RoutedAgentSlot): number 
   const status = hostStatusPriority(right.status) - hostStatusPriority(left.status);
   if (status) return status;
   return (right.activityAt ?? 0) - (left.activityAt ?? 0) || left.sourceSlot - right.sourceSlot;
+}
+
+function comparePriority(left: RoutedAgentSlot, right: RoutedAgentSlot): number {
+  return priorityModeStatus(right.status) - priorityModeStatus(left.status) ||
+    Number(right.selected) - Number(left.selected) ||
+    (right.activityAt ?? 0) - (left.activityAt ?? 0) ||
+    left.sourceSlot - right.sourceSlot;
+}
+
+function priorityModeStatus(status: string): number {
+  if (["approval", "awaiting-approval", "awaiting-response"].includes(status)) return 4;
+  if (["unread", "error"].includes(status)) return 3;
+  if (["working", "thinking"].includes(status)) return 2;
+  if (status === "idle") return 1;
+  return 0;
 }
 
 function hostStatusPriority(status: string): number {

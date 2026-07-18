@@ -60,11 +60,22 @@ Enter the token in the hidden prompt. The relay accepts loopback, Tailscale IPv4
 
 ## Stream Deck behavior
 
-- The six agent keys are one globally ordered Windows+Mac list.
+- The six agent keys form one mode-aware Windows+Mac list controlled by the normal Codex Micro agent-source setting.
 - Each visible tile receives a small `W` or `M` badge and routes to its owning desktop.
 - Add **Windows / Mac Target** to page 2. It switches action slots, joystick, encoder, reasoning, standalone keycaps, and New Task between computers.
 - Agent keys ignore the selected target because each task already knows its owner.
 - The selected target survives plugin and relay restarts. If Mac is selected while offline, the key visibly fails instead of silently executing on Windows.
+
+### Agent-source modes
+
+Single-host Windows and macOS setups preserve Codex's six native slots exactly. In multi-host mode, the Codex app on the computer running the Stream Deck plugin is the controller for the combined list:
+
+- **Pinned:** preserves the controller's six pinned slots and their order, then routes each task to its owning desktop.
+- **Recently updated:** globally orders actual Windows and Mac activity.
+- **Priority:** ranks approval/questions first, then unread/errors, active work, and idle tasks.
+- **Individual assignments:** preserves the controller's slot positions. A controller assignment wins; when that slot is empty and the remote Codex app is also set to Individual assignments, the assignment from the same remote slot is used.
+
+This makes manual mixed layouts possible without another settings application. Assign a synced task directly in the controller Codex app when it is available there. For a Mac-only task that is not selectable on Windows, leave that Windows slot empty and assign the task to the same slot in the Mac Codex Micro settings. Changes are picked up automatically by the next native snapshot.
 
 ### Ownership and SSH mirrors
 

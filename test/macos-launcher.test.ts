@@ -45,3 +45,27 @@ test("LaunchAgent uses a dynamic Node resolver instead of pinning an NVM version
   assert.match(plist, /watcher-launch\.sh/);
   assert.doesNotMatch(plist, /\.nvm\/versions\/node\/v\d/);
 });
+
+test("manual and double-click launch resolve Node outside an interactive shell", async () => {
+  const source = await import("node:fs/promises").then(({ readFile }) => readFile(new URL("../launcher/start-codex-deck.sh", import.meta.url), "utf8"));
+  assert.match(source, /\.nvm\/versions\/node\/\*\/bin\/node/);
+  assert.match(source, /Contents\/Resources\/cua_node\/bin\/node/);
+  assert.match(source, /node_major/);
+  assert.doesNotMatch(source, /exec \/usr\/bin\/env node/);
+});
+
+test("macOS release packaging preserves executable launchers", async () => {
+  const source = await import("node:fs/promises").then(({ readFile }) => readFile(new URL("../scripts/package-macos-release.sh", import.meta.url), "utf8"));
+  assert.match(source, /chmod 755/);
+  assert.match(source, /start-codex-deck\.sh/);
+  assert.match(source, /Start Codex Deck\.command/);
+  assert.match(source, /ditto -c -k/);
+});
+
+test("macOS runtime supports relay pairing without exposing the CDP listener", async () => {
+  const source = await import("node:fs/promises").then(({ readFile }) => readFile(new URL("../launcher/macos/codex-deck-macos.ts", import.meta.url), "utf8"));
+  assert.match(source, /relay-config/);
+  assert.match(source, /RELAY_SERVER_CONFIG_PATH/);
+  assert.match(source, /CodexRelayServer/);
+  assert.doesNotMatch(source, /remote-debugging-address=0\.0\.0\.0/);
+});

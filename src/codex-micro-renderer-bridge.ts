@@ -5,6 +5,7 @@ import { promisify } from "node:util";
 import WebSocket from "ws";
 import { codexDeckStateRoot } from "./codex-deck-paths.js";
 import { OFFICIAL_KEYCAP_IDS, type OfficialKeycapId } from "./keycaps.js";
+import { CodexSessionOwnershipIndex } from "./session-ownership.js";
 import type { MicroActionSlot, MicroDirection, MicroSnapshot, ReasoningAdjustment } from "./types.js";
 
 type DebugTarget = {
@@ -127,7 +128,19 @@ const SNAPSHOT_EXPRESSION = `(async () => {
       break;
     } catch {}
   }
-  const slots = found.slots;
+  const toEpoch = (value) => {
+    if (typeof value === 'number' && Number.isFinite(value) && value > 0) return value < 100000000000 ? value * 1000 : value;
+    if (typeof value === 'string') {
+      const parsed = Date.parse(value);
+      if (Number.isFinite(parsed)) return parsed;
+    }
+    return undefined;
+  };
+  const slots = found.slots.map((slot) => ({
+    ...slot,
+    activityAt: toEpoch(slot.activityAt) ?? toEpoch(slot.updatedAt) ?? toEpoch(slot.lastActivityAt) ??
+      toEpoch(slot.thread?.updatedAt) ?? toEpoch(slot.task?.updatedAt)
+  }));
 
   const html = document.documentElement;
   const body = document.body;
@@ -163,13 +176,15 @@ export class CodexMicroRendererBridge {
   private pending = new Map<number, { resolve: (value: CdpResponse) => void; reject: (error: Error) => void; timer: NodeJS.Timeout }>();
   private connecting?: Promise<void>;
   private lastSnapshot?: MicroSnapshot;
+  private readonly sessionOwnership = new CodexSessionOwnershipIndex();
 
   constructor(private readonly log: (message: string) => void) {}
 
   async refresh(): Promise<MicroSnapshot> {
     try {
       await this.ensureConnected();
-      const snapshot = await this.evaluate<MicroSnapshot>(SNAPSHOT_EXPRESSION);
+      const nativeSnapshot = await this.evaluate<MicroSnapshot>(SNAPSHOT_EXPRESSION);
+      const snapshot = await this.sessionOwnership.annotate(nativeSnapshot);
       this.lastSnapshot = snapshot;
       return snapshot;
     } catch (error) {
@@ -178,12 +193,16 @@ export class CodexMicroRendererBridge {
     }
   }
 
-  async sendAgent(slot: number, act: 0 | 1): Promise<void> {
+  async sendAgent(slot: number, act: 0 | 1, expectedThreadKey?: string): Promise<void> {
     if (!Number.isInteger(slot) || slot < 0 || slot > 5) throw new Error(`Ungültiger Micro-Agent-Slot: ${slot}`);
     const snapshot = this.lastSnapshot ?? await this.refresh();
     const assignment = snapshot.slots.find((item) => item.id === slot);
+    const threadKey = expectedThreadKey ?? assignment?.threadKey ?? null;
+    if (expectedThreadKey && assignment?.threadKey !== expectedThreadKey) {
+      this.log(`Agent slot ${slot + 1} changed before dispatch; routing the preserved task identity.`);
+    }
     await this.dispatch("codex-micro-hid-event", {
-      event: { key: `AG0${slot}`, act, slot, threadKey: assignment?.threadKey ?? null }
+      event: { key: `AG0${slot}`, act, slot, threadKey }
     }, "codex-micro-hid-event");
   }
 

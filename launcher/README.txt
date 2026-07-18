@@ -15,6 +15,7 @@ loopback-only Chrome DevTools port and enables the Codex Micro UI for that
 session. It does not patch the Codex installation or upload any data.
 
 Recommended: run `Start-CodexDeck.ps1 -InstallStartup` once. This installs a
+durable private launcher copy under `%LOCALAPPDATA%\CodexDeck\launcher` plus a
 single hidden background watcher that stays active after Windows sign-in. It
 detects Codex restarts and app updates, removes stale bridge data, and restores
 the bridge automatically whenever Codex starts again.
@@ -26,6 +27,13 @@ recovery restart when Codex launches without its required loopback port.
 
 Remove the watcher with `Start-CodexDeck.ps1 -UninstallStartup`. Diagnostics
 are written to `%LOCALAPPDATA%\CodexDeck\watcher.log`.
+
+Optional Mac pairing: after configuring the relay on the Mac, run
+`Configure-CodexDeckRelay.ps1 -MacAddress 127.0.0.1 -SshHost <Mac SSH alias>`.
+Paste the token into the hidden prompt instead of placing it on the command
+line. The watcher keeps this dedicated SSH relay tunnel alive and
+does not reuse Codex desktop's remote-CLI SSH process. Restart the Stream Deck
+plugin, not Codex. Remove the relay with `-Disable`.
 
 This is an unofficial compatibility bridge and may need an update after a Codex
 desktop release.

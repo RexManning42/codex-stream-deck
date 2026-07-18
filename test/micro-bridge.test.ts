@@ -47,10 +47,12 @@ test("reasoning controls use the official native composer commands", async () =>
 });
 
 test("manifest exposes both dedicated reasoning adjustment buttons", async () => {
-  const manifest = JSON.parse(await readFile(new URL("../static/manifest.json", import.meta.url), "utf8")) as { Actions: Array<{ UUID: string }> };
+  const manifest = JSON.parse(await readFile(new URL("../static/manifest.json", import.meta.url), "utf8")) as { Actions: Array<{ UUID: string }>; OS: Array<{ Platform: string }> };
   const actions = new Set(manifest.Actions.map((action) => action.UUID));
   assert.equal(actions.has("com.simeo.codex-deck.reasoning-down"), true);
   assert.equal(actions.has("com.simeo.codex-deck.reasoning-up"), true);
+  assert.equal(actions.has("com.simeo.codex-deck.host-toggle"), true);
+  assert.deepEqual(manifest.OS.map(({ Platform }) => Platform).sort(), ["mac", "windows"]);
 });
 
 test("all official keycaps are covered by standalone or native actions", async () => {
@@ -72,10 +74,17 @@ test("standalone keycaps resolve Codex's live registry instead of hardcoding com
 });
 
 test("controller avoids overlapping polls and redundant image writes", async () => {
-  const source = await readFile(new URL("../src/controller.ts", import.meta.url), "utf8");
+  const [source, targetSource] = await Promise.all([
+    readFile(new URL("../src/controller.ts", import.meta.url), "utf8"),
+    readFile(new URL("../src/control-target.ts", import.meta.url), "utf8")
+  ]);
   assert.match(source, /lastImages/);
   assert.match(source, /this\.lastImages\.get\(action\.id\) === image/);
   assert.match(source, /scheduleRefresh/);
   assert.match(source, /status === "thinking" \|\| status === "input"/);
+  assert.match(source, /pressedAgents/);
+  assert.match(source, /pressedControlTargets/);
+  assert.match(targetSource, /control-target\.json/);
+  assert.match(source, /targetPlatform === "darwin"/);
   assert.doesNotMatch(source, /setInterval\(/);
 });

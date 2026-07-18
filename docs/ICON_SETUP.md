@@ -1,13 +1,14 @@
 # Local Codex Micro icon setup
 
-Codex Deck does not distribute the official Codex Micro keycap SVGs. This workflow keeps them local to your Windows account.
+Codex Deck does not distribute the official Codex Micro keycap SVGs. This workflow keeps exact local copies outside the repository and release.
 
 ## Destination
 
-Create this directory:
+Use the directory for the computer running Stream Deck:
 
 ```text
-%LOCALAPPDATA%\CodexDeck\icons
+Windows: %LOCALAPPDATA%\CodexDeck\icons
+macOS:   ~/Library/Application Support/CodexDeck/icons
 ```
 
 Each SVG must be named after its Codex keycap ID. The known IDs in the tested Codex build are:
@@ -29,12 +30,12 @@ The plugin reads matching files for the six synchronized physical action slots
 and for the standalone keycap actions. If a file is unavailable, the key still
 receives a readable themed label instead of remaining blank.
 
-## Prompt Codex to copy the files locally
+## Ask Codex to copy the existing files locally
 
-Run this prompt in a Codex task on the Windows PC where Codex is installed:
+Run this on the same computer as the Codex installation. Replace `<ICON_DIRECTORY>` with the platform destination above:
 
 ```text
-Inspect my locally installed Codex Windows app and locate the official Codex Micro keycap SVG files that are already present on this machine. Do not redraw, modify, download, upload, publish, or commit them. Copy the exact local SVG files into %LOCALAPPDATA%\CodexDeck\icons and rename each copy to its Codex keycap ID, such as FAST.svg, APPR.svg, REJ.svg, SPLIT.svg, MIC.svg, MIND+.svg, and MIND-.svg. Keep the source files unchanged. Verify that every copied file is a valid SVG with a viewBox, confirm that the destination is outside the Git repository, and report only the source location, destination location, filenames, and validation result. If the assets cannot be confirmed as files from my local Codex installation, stop without copying anything.
+Inspect my locally installed Codex desktop app and locate the official Codex Micro keycap SVG files that are already present on this machine. Do not redraw, modify, generate, download, upload, publish, or commit them. Copy the exact local SVG files into <ICON_DIRECTORY> and rename each copy to its Codex keycap ID, such as FAST.svg, APPR.svg, REJ.svg, SPLIT.svg, MIC.svg, MIND+.svg, and MIND-.svg. Keep the source files unchanged. Verify that every copied file is a valid SVG with a viewBox, confirm that the destination is outside the Git repository, and report only the source location, destination location, filenames, and validation result. If the assets cannot be confirmed as files from my local Codex installation, stop without copying anything.
 ```
 
 This prompt intentionally limits the work to files already present in your installation and explicitly prevents them from entering the public repository.

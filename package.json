@@ -1,9 +1,9 @@
 {
   "name": "codex-stream-deck",
-  "version": "0.5.1",
+  "version": "0.6.0",
   "private": false,
   "type": "module",
-  "description": "Unofficial Windows bridge between the Codex desktop app and Elgato Stream Deck",
+  "description": "Unofficial Codex Micro bridge for Stream Deck on Windows and macOS, with optional multi-host relay",
   "license": "MIT",
   "author": "Dazer",
   "repository": {
@@ -17,10 +17,13 @@
     "build": "node scripts/build.mjs && node scripts/build-launcher.mjs",
     "docs:preview": "tsx scripts/generate-doc-preview.ts",
     "qa:local-icons": "tsx scripts/generate-local-icon-qa.ts",
+    "smoke:relay": "tsx scripts/relay-smoke.ts",
+    "audit:release": "node scripts/audit-release.mjs",
     "check": "tsc --noEmit",
     "test": "tsx --test test/*.test.ts",
     "validate": "npm run build && streamdeck validate dist/com.simeo.codex-deck.sdPlugin",
-    "pack": "npm run build && streamdeck pack dist/com.simeo.codex-deck.sdPlugin --force"
+    "pack": "npm run build && streamdeck pack dist/com.simeo.codex-deck.sdPlugin --force",
+    "release:prepare": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/prepare-release.ps1"
   },
   "dependencies": {
     "@elgato/streamdeck": "2.1.0",

@@ -1,12 +1,21 @@
 # Changelog
 
-## 0.5.1 - Unreleased
+## 0.6.0 - 2026-07-18
 
+- Added the local macOS Codex Micro launcher and persistent LaunchAgent watcher.
+- Added an opt-in authenticated SSH/Tailscale relay for mixed Windows/macOS agent slots and native command routing.
+- Added a Windows/Mac target action while keeping agent keys bound to each task's originating host.
+- Added host badges and stable `(hostId, threadKey)` routing for the six global agent keys.
 - Replaced the one-shot Windows-login launcher with a persistent, single-instance bridge watcher.
 - Automatically recovers the bridge after Codex updates, crashes, and normal restarts.
 - Detects rapid Codex restarts by main-process generation even when no stopped interval is observed.
 - Avoids touching a normal Codex session that was already open when the watcher is first installed.
 - Removes stale bridge-port files and records bounded diagnostics in `%LOCALAPPDATA%\CodexDeck\watcher.log`.
+- Added independent Windows-only and macOS-only operation from the same Stream Deck plugin package.
+- Added host-generic task ownership and global recent-activity ordering for mixed Mac/Windows agent keys.
+- Restricted relay listeners and clients to loopback or explicit Tailscale addresses and added hidden token entry on Windows.
+- Installed the Windows watcher into a durable per-user location instead of depending on the extracted ZIP folder.
+- Added separated release archives, checksums, and an automated audit for private state, personal setup markers, and protected keycap SVGs.
 
 ## 0.5.0 - 2026-07-17
 

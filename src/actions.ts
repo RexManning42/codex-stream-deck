@@ -260,3 +260,24 @@ export class NewTask extends SingletonAction {
     }
   }
 }
+
+@action({ UUID: "com.simeo.codex-deck.host-toggle" })
+export class HostToggle extends SingletonAction {
+  constructor(private readonly controller: DeckController) { super(); }
+
+  override onWillAppear(ev: WillAppearEvent): void {
+    if (ev.action.isKey()) this.controller.registerHostToggle(ev.action);
+  }
+
+  override onWillDisappear(ev: WillDisappearEvent): void {
+    this.controller.unregisterHostToggle(ev.action);
+  }
+
+  override async onKeyDown(ev: KeyDownEvent): Promise<void> {
+    try { await this.controller.toggleTargetHost(); }
+    catch (error) {
+      streamDeck.logger.error(`Host toggle failed: ${String(error)}`);
+      await ev.action.showAlert();
+    }
+  }
+}

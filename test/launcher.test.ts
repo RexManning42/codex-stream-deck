@@ -37,7 +37,12 @@ test("startup monitoring survives Codex updates without duplicate watchers", asy
   assert.match(launcher, /Watch-CodexDeck\.ps1/);
   assert.match(launcher, /-RecoverExistingSession/);
   assert.match(launcher, /Start-BridgeWatcher/);
+  assert.match(launcher, /Get-InstalledLauncherRoot/);
+  assert.match(launcher, /Install-WatcherBundle/);
+  assert.match(launcher, /LocalAppData.*CodexDeck.*launcher/is);
   assert.match(build, /Watch-CodexDeck\.ps1/);
+  assert.match(build, /Configure-CodexDeckRelay\.ps1/);
+  assert.match(build, /replace\(\/\\r\\n\/g, "\\n"\)/);
 });
 
 test("watcher recovery decision self-test passes in PowerShell", async () => {
@@ -45,7 +50,7 @@ test("watcher recovery decision self-test passes in PowerShell", async () => {
   const { stdout } = await execFileAsync("powershell.exe", [
     "-NoLogo", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", watcherPath, "-SelfTest"
   ]);
-  assert.match(stdout, /self-test passed \(6 cases\)/i);
+  assert.match(stdout, /self-test passed \(9 cases\)/i);
 });
 
 test("launcher supports the current shared-chunk native detection path", () => {

@@ -1,107 +1,95 @@
 # Codex Deck
 
-An unofficial bridge that brings the Codex Micro control model to an Elgato Stream Deck. The released Stream Deck workflow is Windows-based; the repository also contains a local-only macOS launcher and persistent bridge watcher for the future multi-host hub.
-
-Codex Deck mirrors the six native agent slots, their live states, the six configurable Micro action slots, joystick directions, encoder click, and reasoning-effort controls. It sends Codex's own renderer events instead of typing text or relying on global hotkeys.
+Codex Deck brings the Codex Micro control model to an Elgato Stream Deck. It mirrors Codex's six native agent slots and sends Codex's own Micro events for actions, joystick directions, encoder clicks, reasoning effort, and official keycap commands. It does not type text or depend on global hotkeys.
 
 > [!IMPORTANT]
-> This is an independent community project. It is not made, supported, or endorsed by OpenAI or Elgato. It relies on undocumented Codex desktop internals and may need an update after a Codex release.
+> This is an independent community project. It is not made, supported, or endorsed by OpenAI or Elgato. It uses undocumented Codex desktop internals and may need an update after a Codex release.
 
 ![Six public agent-tile states in Codex-aligned dark mode](docs/assets/agent-status-preview-dark.svg)
 
-## What works
+## Choose your setup
 
-- Six dynamic agent keys using the assignments selected in **Codex Settings > Codex Micro**.
-- Live states: idle, working, unread completion, approval/input required, error, and empty.
-- Automatic light/dark rendering that follows the active Codex appearance.
-- Native key-down and key-up events for Micro action slots `ACT06` through `ACT12`.
-- Native joystick events for up, right, down, and left.
-- Native encoder click.
+The same Stream Deck plugin package works in all three modes. Install only the launcher and configuration needed for your setup.
+
+| Setup | Stream Deck software | Codex controlled | Guide |
+|---|---|---|---|
+| Windows only | Windows | Local Windows Codex | [Windows setup](docs/WINDOWS.md) |
+| Mac only | macOS | Local Mac Codex | [macOS setup](docs/MACOS.md) |
+| Windows + Mac | Windows | Both apps; six agents are merged | [Multi-host setup](docs/MULTI_HOST.md) |
+
+Windows-only and Mac-only mode have no relay, no second computer dependency, and no host badges. Multi-host mode is optional and can be disabled without changing the local bridge on either machine.
+
+## Features
+
+- Six dynamic agent keys using the source and assignments selected in **Codex Settings > Codex Micro**.
+- Live idle, working, unread completion, approval/input, error, and empty states.
+- Codex-aligned light and dark rendering with restrained status animation.
+- Native key-down/key-up handling for Micro slots `ACT06` through `ACT12`.
+- Native joystick up, right, down, left, and encoder click.
 - Dedicated reasoning-effort up/down buttons with press-and-hold repeat.
-- A direct `codex://threads/new` action for starting a new task.
-- Standalone actions for all 29 official single-size keycaps, resolved from Codex's live Micro registry.
-- The official microphone keycap as a true native press/release action.
-- Optional local loading of Codex Micro keycap SVGs without redistributing those files.
-- A readable Codex-aligned fallback when a local keycap SVG is missing.
-
-There is deliberately no legacy task-database reader, log scraper, or hotkey fallback in the public runtime.
+- A local `codex://threads/new` action for a new task.
+- Standalone actions for all official single-size keycaps, resolved from the installed Codex build at runtime.
+- Optional local loading of official keycap SVGs; those protected files are never included in this repository or its releases.
+- Optional authenticated SSH/Tailscale relay for one Stream Deck controlling Windows and Mac Codex together.
 
 ## Requirements
 
-- Windows 10 or newer.
-- The Codex desktop app for Windows.
-- Elgato Stream Deck 6.6 or newer.
-- Node.js 20 or newer for the launcher.
-- Tested hardware: the standard 15-key Stream Deck MK.2.
+- Codex desktop on the computer being controlled.
+- Elgato Stream Deck 6.6 or newer on the computer connected to the Stream Deck.
+- Node.js 20 or newer for the platform launcher.
+- Windows 10+ or macOS 13+.
+- Tested hardware: standard 15-key Stream Deck MK.2.
 
-Other 15-key Stream Deck models may work, but have not been verified yet.
+Other Stream Deck models may work, but the included layout and physical-device testing target the normal 5×3 MK.2.
 
-### macOS foundation
+## Quick install
 
-The macOS launcher enables the same native Codex Micro renderer event path in
-the installed Codex app and can install a persistent per-user LaunchAgent. It
-does not yet relay the Mac to a Windows/Stream Deck host. See
-[macOS launcher and watcher](docs/MACOS.md) for install, diagnostics, safety,
-and uninstall commands.
-
-## Install
-
-1. Open the latest [GitHub release](https://github.com/dazer1234/codex-stream-deck/releases/latest).
-2. Download and double-click `com.simeo.codex-deck.streamDeckPlugin`.
-3. Download and extract the matching `codex-deck-launcher` ZIP.
-4. Double-click **Start Codex Deck.cmd** from the extracted launcher folder. If Codex is already running from the launcher, it reuses that session; if it was launched normally, it restarts it once with the bridge enabled.
-5. Open **Codex Settings > Codex Micro** and choose the agent source, action assignments, joystick actions, and encoder behavior you want.
-6. In Stream Deck, drag the Codex Deck actions onto your keys using the layout below.
-
-Without the optional watcher, use **Start Codex Deck.cmd** whenever you want to use the bridge. You do not need to restart an already launcher-started Codex session.
-
-To remove that manual step permanently, run `Start-CodexDeck.ps1 -InstallStartup` once.
-This installs a single hidden watcher that stays active after Windows sign-in,
-tracks Codex across app updates and restarts, removes stale bridge ports, and
-automatically restores the bridge when Codex launches again. Installing it
-does not restart a normal Codex session that is already open; that session is
-picked up after its next normal close and reopen. Remove the watcher with
-`-UninstallStartup`.
+1. Download `com.simeo.codex-deck.streamDeckPlugin` from the matching [GitHub release](https://github.com/dazer1234/codex-stream-deck/releases/latest) and open it on the computer running Stream Deck.
+2. Download only the launcher for that computer:
+   - Windows: `codex-deck-launcher-windows-vX.Y.Z.zip`
+   - macOS: `codex-deck-launcher-macos-vX.Y.Z.zip`
+3. Follow [Windows](docs/WINDOWS.md), [macOS](docs/MACOS.md), or [Windows + Mac](docs/MULTI_HOST.md).
+4. In **Codex Settings > Codex Micro**, choose the agent source, action assignments, joystick actions, and encoder behavior.
+5. Build the two Stream Deck pages below.
 
 ## Recommended 15-key layout
 
-Page 1:
+This is the actual polished two-page layout used for the MK.2. It keeps the six live agents on the main page and puts lower-frequency navigation/reasoning controls on page 2.
+
+> This layout is only a recommendation and a practical starting point. Every action, position, page, and profile can be customized freely to match your own workflow; Codex Deck does not require this exact arrangement.
+
+### Page 1 — agents and daily actions
 
 | Agent 1 | Agent 2 | Agent 3 | Agent 4 | Agent 5 |
 |---|---|---|---|---|
-| Agent 6 | Action 1 | Action 2 | Action 3 | Action 4 |
-| Action 5 | Action 6 | Stream Deck: Next Page | Encoder Click | New Task |
+| Agent 6 | Action 1 / Fast | Action 2 / Approve | Action 3 / Reject | Action 4 / Fork |
+| Action 5 / Push-to-talk | Keycap · Browser¹ | Stream Deck: Next Page | Reasoning Encoder Click | New Task |
 
-The six action keys follow whatever is assigned to `ACT06`, `ACT07`, `ACT08`, `ACT09`, `ACT10/11`, and `ACT12` in the Codex Micro settings. Names such as Fast, Approve, Reject, Fork, Push-to-talk, and Send are defaults, not hardcoded behavior.
+The action names describe the default Codex Micro setup. The keys always follow the live `ACT06`, `ACT07`, `ACT08`, `ACT09`, and `ACT10/11` assignments selected in Codex. ¹If you use `ACT12` / Send more often than Browser, put **Action 6 / Send** in that position instead.
 
-Page 2:
+### Page 2 — navigation and reasoning
 
-| Joystick Up | Reasoning Down | Encoder Click | Reasoning Up | New Task |
+| Windows / Mac Target² | Empty | Joystick Up / Plan | Reasoning Down | Reasoning Up |
 |---|---|---|---|---|
-| Empty | Joystick Left | Stream Deck: Previous Page | Joystick Right | Empty |
-| Empty | Empty | Joystick Down | Empty | Empty |
+| Empty | Joystick Left / Back | Stream Deck: Previous Page | Joystick Right / Forward | Reasoning Encoder Click |
+| Stream Deck: Switch Profile³ | Empty | Joystick Down / Sidebar | Empty | New Task |
 
-The page-navigation keys are built-in Stream Deck actions, not Codex Deck actions.
+²Use the target key only in Windows + Mac mode. In a single-computer setup, leave it empty or replace it with another keycap action. ³Configure Stream Deck's built-in **Switch Profile** action to return to your own standard profile; no user-specific profile ID is distributed.
 
-The Stream Deck action list also exposes every official Codex Micro keycap as a
-standalone action. These execute the command currently associated with that
-keycap in the installed Codex build, independently of the six physical action
-slots. This makes the full keycap set practical on extra pages without changing
-your primary Micro layout.
+The page-navigation and profile-switch keys are built-in Stream Deck actions. All other named controls come from Codex Deck. Every official Codex Micro keycap is also exposed as a standalone action, so extra pages can be customized without changing the six synchronized Micro action slots.
 
 ## Official keycap SVGs are not included
 
-The repository and release intentionally do **not** contain OpenAI's Codex Micro command/keycap SVG files. The original agent-tile renderer, glow system, animations, and status marks are included under the repository license.
+The public source and release intentionally exclude OpenAI's Codex Micro keycap SVG files. The original agent tiles, status marks, glow system, animations, fallback labels, and plugin artwork are included.
 
-If you have the right to use the official keycap files from your own local Codex installation, place them in:
+If you have the right to use the files already present in your own Codex installation, copy them outside the repository to:
 
 ```text
-%LOCALAPPDATA%\CodexDeck\icons
+Windows: %LOCALAPPDATA%\CodexDeck\icons
+macOS:   ~/Library/Application Support/CodexDeck/icons
 ```
 
-Rename each file to its Codex keycap ID, for example `FAST.svg`, `APPR.svg`, `REJ.svg`, `SPLIT.svg`, or `MIC.svg`. Codex Deck renders matching files automatically on both synchronized Micro slots and standalone keycap actions. Nothing from this folder is uploaded or committed.
-
-For a careful local extraction workflow and a ready-to-copy Codex prompt, see [Local icon setup](docs/ICON_SETUP.md).
+Name each copy after its Codex keycap ID, such as `FAST.svg`, `APPR.svg`, `REJ.svg`, `SPLIT.svg`, or `MIC.svg`. Codex can inspect your local installation and copy the exact existing SVG files for you when explicitly instructed not to redraw, download, upload, publish, or commit them. See [Local icon setup](docs/ICON_SETUP.md) for the guarded workflow and complete filename list.
 
 ## How it works
 
@@ -113,58 +101,44 @@ Stream Deck key
     -> native Codex Micro handler
 ```
 
-The launcher starts the installed Codex app with a random debug port bound to `127.0.0.1`, records that port in `%LOCALAPPDATA%\CodexDeck\codex-micro-bridge.json`, and enables the Micro UI for that session. The plugin discovers version-hashed renderer modules at runtime, reads the native Micro slot/layout state, and dispatches the same three event families used by the Micro integration:
+The launcher enables a random Chrome DevTools port bound to `127.0.0.1`. The plugin discovers version-hashed renderer modules, reads the native Micro layout/state, and dispatches the same event families used by the Micro integration:
 
 - `codex-micro-device-state-changed`
 - `codex-micro-hid-event`
 - `codex-micro-joystick-event`
 
-See [Architecture and security](docs/ARCHITECTURE.md) for the full boundary.
+No virtual HID driver is installed and no Codex application file is patched. See [Architecture and security](docs/ARCHITECTURE.md).
 
 ## Security and privacy
 
-- The bridge listens on loopback only; it is not intentionally exposed to your network.
-- Chrome DevTools access is powerful. Any untrusted process running as your Windows user could attempt to access the local port while that Codex session is open.
-- The plugin sends no telemetry and has no cloud service.
-- The public runtime does not read Codex task databases, rollout files, or desktop logs.
-- Local icon SVGs are read only from `%LOCALAPPDATA%\CodexDeck\icons`.
-- Closing the launcher-started Codex session closes the debug endpoint.
-- The optional watcher remains local, single-instance, and records only bounded diagnostics in `%LOCALAPPDATA%\CodexDeck\watcher.log`.
+- The Codex debug endpoint remains loopback-only and is never the multi-host relay endpoint.
+- CDP is privileged: another untrusted process running as the same local user could try to access it.
+- Codex Deck has no telemetry, cloud service, or update service.
+- Single-host mode reads no rollout data. Multi-host mode reads only exact local rollout **filenames**, never their contents, to distinguish a task's owning desktop from a cloud/SSH mirror.
+- Optional SVGs stay in the user-local icons directory and are never uploaded.
+- Multi-host mode accepts only authenticated, typed Codex Deck commands over SSH or Tailscale; wildcard and arbitrary public-IP listeners are rejected.
+- Private relay tokens, local host state, logs, and personal paths are excluded by the release audit.
 
-Do not use the launcher on a machine where you run untrusted local software. See [SECURITY.md](SECURITY.md) before reporting a vulnerability.
+Do not use the launcher while running untrusted local software. See [SECURITY.md](SECURITY.md).
 
 ## Compatibility
 
-The current local build was verified with:
+Release 0.6.0 was locally validated against:
 
-- Codex for Windows `26.715.2305.0`
+- Codex for Windows `26.715.3651.0`
+- Codex for macOS `26.715.31251` (build `5538`)
 - Stream Deck `7.4.2.22730`
-- Windows build `10.0.26220.0`
+- Windows `10.0.26220.0`
 - Node.js `24.13.0`
 - Standard 15-key Stream Deck MK.2
 
-These are tested versions, not strict minimums. Because Codex Deck uses undocumented renderer internals, newer Codex versions can break compatibility even when the Stream Deck plugin itself still loads.
+The Windows physical-device path and the Windows+Mac relay were exercised on the real setup. The macOS launcher, watcher, native bridge, and plugin package are validated; a Stream Deck physically attached to the Mac has not yet been hardware-tested. These are tested versions, not strict maximums.
 
 ## Troubleshooting
 
-Start with [Troubleshooting](docs/TROUBLESHOOTING.md). The quickest checks are:
+Start with [Troubleshooting](docs/TROUBLESHOOTING.md). The important rule is: restart only the Stream Deck plugin/app for plugin updates. Do not restart Codex unless the launcher explicitly says an unbridged Codex generation needs one recovery restart and you choose to proceed.
 
-1. Run `Start-CodexDeck.ps1 -DryRun` from PowerShell.
-2. Confirm `%LOCALAPPDATA%\CodexDeck\codex-micro-bridge.json` exists after launch.
-3. Confirm Codex Settings shows **Codex Micro**.
-4. Restart Stream Deck after installing or updating the plugin.
-5. Check Stream Deck logs for `Native Codex-Micro bridge connected`.
-
-## Uninstall
-
-1. Remove **Codex Deck** from Stream Deck's plugin settings.
-2. Close Codex and launch it normally.
-3. Delete `%LOCALAPPDATA%\CodexDeck` if you also want to remove the port file and local icon copies.
-4. Delete the extracted launcher folder.
-
-The launcher does not patch files inside the Codex installation.
-
-## Build from source
+## Build and release validation
 
 ```powershell
 npm ci
@@ -172,24 +146,13 @@ npm run check
 npm test
 npm run validate
 npm run pack
+npm run audit:release
 ```
 
-Outputs:
+`npm run release:prepare` creates a versioned local release-candidate directory with the plugin package, Windows launcher ZIP, and SHA-256 checksums. The macOS ZIP must be created on macOS with `scripts/package-macos-release.sh` so executable bits survive; pass that ZIP to `scripts/prepare-release.ps1 -MacArchivePath ...`.
 
-- Plugin bundle: `dist/com.simeo.codex-deck.sdPlugin`
-- Launcher folder: `release/codex-deck-launcher`
-- Installable plugin package: `com.simeo.codex-deck.streamDeckPlugin`
-- macOS launcher folder: `release/codex-deck-launcher-macos`
+Nothing is published automatically. See [CONTRIBUTING.md](CONTRIBUTING.md).
 
-See [CONTRIBUTING.md](CONTRIBUTING.md) before opening a pull request.
+## License and trademarks
 
-## Trademarks and assets
-
-OpenAI, Codex, ChatGPT, and related marks and assets belong to OpenAI. Elgato and Stream Deck belong to their respective owner. This repository's code and original project artwork are licensed under MIT; third-party marks and user-supplied assets are not relicensed.
-
-- [OpenAI brand guidelines](https://openai.com/brand/)
-- [Elgato Stream Deck plugin distribution documentation](https://docs.elgato.com/streamdeck/sdk/v1/introduction/distribution/)
-
-## License
-
-[MIT](LICENSE)
+Code and original artwork are licensed under [MIT](LICENSE). OpenAI, Codex, ChatGPT, Elgato, Stream Deck, and their marks/assets belong to their respective owners; third-party and user-supplied assets are not relicensed.

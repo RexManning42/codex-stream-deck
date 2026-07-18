@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawn, spawnSync } from "node:child_process";
-import { randomUUID } from "node:crypto";
+import { randomBytes, randomUUID } from "node:crypto";
 import {
   chmod, copyFile, mkdir, mkdtemp, open, readFile, readdir, rename, rm, stat, writeFile
 } from "node:fs/promises";
@@ -8,6 +8,8 @@ import { createServer } from "node:net";
 import { homedir, hostname, platform, tmpdir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { CodexMicroRendererBridge } from "../../src/codex-micro-renderer-bridge.js";
+import { CodexRelayServer, validateRelayServerConfig, type RelayServerConfig } from "../../src/codex-relay-server.js";
 import { applyRuntimeOverride, verifyMicroRuntime } from "../runtime-override.js";
 import {
   createWatcherPolicyState,
@@ -24,6 +26,7 @@ const HOST_STATE_PATH = join(STATE_ROOT, "host.json");
 const WATCHER_STATE_PATH = join(STATE_ROOT, "watcher-state.json");
 const WATCHER_LOG_PATH = join(STATE_ROOT, "watcher.log");
 const WATCHER_LOCK_PATH = join(STATE_ROOT, "watcher.lock");
+const RELAY_SERVER_CONFIG_PATH = join(STATE_ROOT, "relay-server.json");
 const INSTALLED_RUNTIME_PATH = join(STATE_ROOT, "codex-deck-macos.mjs");
 const WATCHER_LAUNCHER_PATH = join(STATE_ROOT, "watcher-launch.sh");
 const LAUNCH_AGENT_PATH = join(homedir(), "Library", "LaunchAgents", `${AGENT_LABEL}.plist`);
@@ -365,7 +368,12 @@ async function runWatcher(): Promise<number> {
     return 0;
   }
   let released = false;
+  let relayServer: CodexRelayServer | undefined;
+  let relayControl: CodexMicroRendererBridge | undefined;
+  let relaySignature = "";
   const cleanup = async () => {
+    await relayServer?.close().catch(() => {});
+    relayControl?.close();
     if (!released) { released = true; await release(); }
   };
   process.once("SIGTERM", () => { void cleanup().finally(() => process.exit(0)); });
@@ -385,6 +393,28 @@ async function runWatcher(): Promise<number> {
         });
         policy = decision.state;
         await atomicWriteJson(WATCHER_STATE_PATH, policy);
+
+        const relayConfig = await readJson<RelayServerConfig>(RELAY_SERVER_CONFIG_PATH);
+        const nextRelaySignature = relayConfig?.enabled ? JSON.stringify(relayConfig) : "";
+        if (nextRelaySignature !== relaySignature) {
+          await relayServer?.close();
+          relayControl?.close();
+          relayServer = undefined;
+          relayControl = undefined;
+          relaySignature = "";
+          if (relayConfig?.enabled) {
+            const identity = await hostState();
+            relayControl = new CodexMicroRendererBridge((message) => { void log(message); });
+            relayServer = new CodexRelayServer(
+              relayConfig,
+              { ...identity, platform: "darwin" },
+              relayControl,
+              (message) => { void log(message); }
+            );
+            await relayServer.start();
+          }
+          relaySignature = nextRelaySignature;
+        }
 
         if (port != null) {
           const signature = `${main!.generation}:${port}`;
@@ -521,6 +551,7 @@ async function dryRun(): Promise<void> {
   const main = findMainProcess(installation);
   const port = await healthyDebugPort(main);
   const staleState = await readJson<{ port?: unknown }>(BRIDGE_STATE_PATH);
+  const relayConfig = await readJson<RelayServerConfig>(RELAY_SERVER_CONFIG_PATH);
   console.log(`Codex app: ${installation.appPath}`);
   console.log(`Bundle ID: ${installation.bundleId}`);
   console.log(`Version: ${installation.version} (${installation.buildVersion})`);
@@ -528,9 +559,32 @@ async function dryRun(): Promise<void> {
   console.log(`Main process: ${main ? `${main.pid} (${main.generation})` : "not running"}`);
   console.log(`Reusable loopback bridge: ${port ?? "none"}`);
   console.log(`Bridge state file: ${staleState ? "present (not modified in dry-run)" : "absent"}`);
+  console.log(`Multi-host relay: ${relayConfig?.enabled ? `configured for ${relayConfig.listenHost}:${relayConfig.port}` : "disabled"}`);
   if (main && !port) console.log("Action: a real restart would be required; dry-run left Codex untouched.");
   else if (!main) console.log("Action: start Codex with a random loopback port.");
   else console.log("Action: reuse the current bridge and apply the runtime override.");
+}
+
+async function configureRelay(listenHost: string | undefined, portValue: string | undefined): Promise<void> {
+  const port = portValue == null ? 47_651 : Number.parseInt(portValue, 10);
+  const config: RelayServerConfig = {
+    enabled: true,
+    listenHost: listenHost?.trim() ?? "",
+    port,
+    token: randomBytes(32).toString("base64url")
+  };
+  validateRelayServerConfig(config);
+  await mkdir(STATE_ROOT, { recursive: true, mode: 0o700 });
+  await atomicWriteJson(RELAY_SERVER_CONFIG_PATH, config);
+  console.log(`Mac relay configured on ${config.listenHost}:${config.port}.`);
+  console.log("Copy this file content to the Windows relay configurator; treat the token like a password:");
+  console.log(JSON.stringify({ enabled: true, url: `ws://${config.listenHost}:${config.port}`, token: config.token }, null, 2));
+  console.log("The running watcher detects this file automatically; Codex is not restarted.");
+}
+
+async function disableRelay(): Promise<void> {
+  await rm(RELAY_SERVER_CONFIG_PATH, { force: true });
+  console.log("Mac relay disabled. The watcher will close the listener without restarting Codex.");
 }
 
 async function startOnce(allowRestart: boolean): Promise<number> {
@@ -618,10 +672,12 @@ async function main(): Promise<number> {
   }
   if (command === "install") { await installLaunchAgent(); return 0; }
   if (command === "uninstall") { await uninstallLaunchAgent(); return 0; }
+  if (command === "relay-config") { await configureRelay(process.argv[3], process.argv[4]); return 0; }
+  if (command === "relay-disable") { await disableRelay(); return 0; }
   if (command === "watch") return await runWatcher();
   if (command === "start") return await startOnce(process.argv.includes("--restart"));
   if (command === "--restart") return await startOnce(true);
-  throw new Error("Usage: start-codex-deck.sh [start [--restart]|dry-run|self-test|install|uninstall|watch|print-launch-agent]");
+  throw new Error("Usage: start-codex-deck.sh [start [--restart]|dry-run|self-test|install|uninstall|watch|relay-config <127.0.0.1-or-tailscale-ip> [port]|relay-disable|print-launch-agent]");
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {

@@ -1,5 +1,5 @@
 import WebSocket from "ws";
-import { pathToFileURL } from "node:url";
+import { basename } from "node:path";
 
 const MICRO_GATE = "3207467860";
 const DETECTION_KEY = "codex-micro-has-ever-been-detected";
@@ -41,19 +41,101 @@ export function buildRuntimeOverrideExpression(gateName = MICRO_GATE): string {
       ...[...document.querySelectorAll('link[href], script[src]')].map((element) => element.href || element.src),
       ...performance.getEntriesByType('resource').map((entry) => entry.name)
     ];
-    const persistedUrl = [...new Set(urls)].find((url) => url.includes('/assets/persisted-signal-'));
-    if (!persistedUrl) return { ready: false, reason: 'persisted-signal-module-unavailable' };
-
-    const persisted = await import(persistedUrl);
-    if (typeof persisted.p !== 'function' || typeof persisted.b !== 'function') {
-      return { ready: false, reason: 'persisted-signal-api-changed' };
+    const uniqueUrls = [...new Set(urls)].filter((url) => url.includes('/assets/') && url.endsWith('.js'));
+    const persistedUrl = uniqueUrls.find((url) => url.includes('/assets/persisted-signal-'));
+    let detected = null;
+    let detectionMethod = 'native-device-event';
+    if (persistedUrl) {
+      const persisted = await import(persistedUrl);
+      if (typeof persisted.p !== 'function' || typeof persisted.b !== 'function') {
+        return { ready: false, reason: 'persisted-signal-api-changed' };
+      }
+      persisted.b(${JSON.stringify(DETECTION_KEY)}, true);
+      detected = Boolean(persisted.p(${JSON.stringify(DETECTION_KEY)}, false));
+      detectionMethod = 'persisted-signal';
     }
-    persisted.b(${JSON.stringify(DETECTION_KEY)}, true);
     for (const client of clients) client.$emt?.({ name: 'values_updated' });
 
+    // Newer Codex builds moved the persisted signal into a shared renderer
+    // chunk. Announcing the native device through the already-loaded event bus
+    // preserves the same Codex-owned detection path without naming that chunk.
+    const likelyModules = uniqueUrls.filter((url) =>
+      /(?:vscode-api|codex-micro|app-initial|artifact-tab-content)/.test(url)
+    ).slice(0, 120);
+    let nativeEventBus = false;
+    let deviceHandlers = 0;
+    let deviceEventDispatched = false;
+    const eventDeadline = Date.now() + 5000;
+    while (Date.now() < eventDeadline && !deviceEventDispatched) {
+      for (const url of likelyModules) {
+        try {
+          const module = await import(url);
+          const bus = Object.values(module).find((candidate) => candidate && typeof candidate === 'object' &&
+            (typeof candidate.dispatchHostMessage === 'function' || typeof candidate.dispatchMessage === 'function'));
+          if (!bus) continue;
+          nativeEventBus = true;
+          deviceHandlers = bus.handlers instanceof Map
+            ? (bus.handlers.get('codex-micro-device-state-changed')?.size ?? 0)
+            : 1;
+          if (deviceHandlers === 0) continue;
+          const dispatch = bus.dispatchHostMessage ?? bus.dispatchMessage;
+          dispatch.call(bus, ${JSON.stringify({
+            type: "codex-micro-device-state-changed",
+            state: { status: "connected", error: null, battery: { percentage: 100, isCharging: true } }
+          })});
+          deviceEventDispatched = true;
+          break;
+        } catch { /* Ignore unrelated already-loaded renderer chunks. */ }
+      }
+      if (!deviceEventDispatched) await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+
     const enabled = clients.map((client) => Boolean(client.checkGate?.(gateName)));
-    const detected = Boolean(persisted.p(${JSON.stringify(DETECTION_KEY)}, false));
-    return { ready: enabled.every(Boolean) && detected, enabled, detected, clients: clients.length };
+    return {
+      ready: enabled.every(Boolean) && (detected === true || deviceEventDispatched),
+      enabled,
+      detected,
+      detectionMethod,
+      nativeEventBus,
+      deviceHandlers,
+      deviceEventDispatched,
+      clients: clients.length
+    };
+  })()`;
+}
+
+export function buildRuntimeVerificationExpression(): string {
+  return `(async () => {
+    const urls = [...new Set([
+      ...[...document.querySelectorAll('link[href], script[src]')].map((element) => element.href || element.src),
+      ...performance.getEntriesByType('resource').map((entry) => entry.name)
+    ])].filter((url) => url.includes('/assets/') && url.endsWith('.js'));
+    const likelyModules = urls.filter((url) =>
+      /(?:vscode-api|codex-micro|app-initial|artifact-tab-content)/.test(url)
+    ).slice(0, 120);
+    let bus = null;
+    for (const url of likelyModules) {
+      try {
+        const module = await import(url);
+        bus = Object.values(module).find((candidate) => candidate && typeof candidate === 'object' &&
+          (typeof candidate.dispatchHostMessage === 'function' || typeof candidate.dispatchMessage === 'function')) ?? null;
+        if (bus?.handlers instanceof Map) break;
+      } catch { /* Ignore unrelated already-loaded renderer chunks. */ }
+    }
+    const hidHandlers = bus?.handlers instanceof Map ? (bus.handlers.get('codex-micro-hid-event')?.size ?? 0) : 0;
+    const joystickHandlers = bus?.handlers instanceof Map ? (bus.handlers.get('codex-micro-joystick-event')?.size ?? 0) : 0;
+    const settingsLink = Boolean(document.querySelector('[href*="/settings/codex-micro"]'));
+    const statsig = globalThis.__STATSIG__;
+    const clients = [...new Set([statsig?.firstInstance, ...Object.values(statsig?.instances ?? {})].filter(Boolean))];
+    const menuEnabled = settingsLink || (clients.length > 0 && clients.every((client) => Boolean(client.checkGate?.(${JSON.stringify(MICRO_GATE)}))));
+    return {
+      ready: menuEnabled && Boolean(bus) && hidHandlers > 0 && joystickHandlers > 0,
+      menuEnabled,
+      nativeEventBus: Boolean(bus),
+      hidHandlers,
+      joystickHandlers,
+      modulesInspected: likelyModules.length
+    };
   })()`;
 }
 
@@ -135,7 +217,25 @@ export async function applyRuntimeOverride(port: number, timeout = 20_000): Prom
   }
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+export async function verifyMicroRuntime(port: number, timeout = 20_000): Promise<unknown> {
+  const target = await findTarget(port, timeout);
+  const client = new CdpClient(target.webSocketDebuggerUrl!);
+  await client.connect();
+  try {
+    const deadline = Date.now() + timeout;
+    let result: unknown;
+    while (Date.now() < deadline) {
+      result = await client.evaluate(buildRuntimeVerificationExpression());
+      if ((result as { ready?: boolean } | null)?.ready) return result;
+      await delay(250);
+    }
+    throw new Error(`Timed out verifying the Codex Micro runtime: ${JSON.stringify(result)}`);
+  } finally {
+    client.close();
+  }
+}
+
+if (process.argv[1] && ["runtime-override.mjs", "runtime-override.ts"].includes(basename(process.argv[1]))) {
   const port = Number.parseInt(process.argv[2] ?? "", 10);
   if (!Number.isInteger(port) || port < 1 || port > 65_535) throw new Error("Usage: node runtime-override.mjs <port>");
   const result = await applyRuntimeOverride(port);

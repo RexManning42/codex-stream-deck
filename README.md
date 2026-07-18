@@ -1,6 +1,6 @@
 # Codex Deck
 
-An unofficial, Windows-only bridge that brings the Codex Micro control model to an Elgato Stream Deck.
+An unofficial bridge that brings the Codex Micro control model to an Elgato Stream Deck. The released Stream Deck workflow is Windows-based; the repository also contains a local-only macOS launcher and persistent bridge watcher for the future multi-host hub.
 
 Codex Deck mirrors the six native agent slots, their live states, the six configurable Micro action slots, joystick directions, encoder click, and reasoning-effort controls. It sends Codex's own renderer events instead of typing text or relying on global hotkeys.
 
@@ -35,6 +35,14 @@ There is deliberately no legacy task-database reader, log scraper, or hotkey fal
 - Tested hardware: the standard 15-key Stream Deck MK.2.
 
 Other 15-key Stream Deck models may work, but have not been verified yet.
+
+### macOS foundation
+
+The macOS launcher enables the same native Codex Micro renderer event path in
+the installed Codex app and can install a persistent per-user LaunchAgent. It
+does not yet relay the Mac to a Windows/Stream Deck host. See
+[macOS launcher and watcher](docs/MACOS.md) for install, diagnostics, safety,
+and uninstall commands.
 
 ## Install
 
@@ -171,6 +179,7 @@ Outputs:
 - Plugin bundle: `dist/com.simeo.codex-deck.sdPlugin`
 - Launcher folder: `release/codex-deck-launcher`
 - Installable plugin package: `com.simeo.codex-deck.streamDeckPlugin`
+- macOS launcher folder: `release/codex-deck-launcher-macos`
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) before opening a pull request.
 

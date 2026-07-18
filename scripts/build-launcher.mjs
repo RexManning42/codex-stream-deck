@@ -3,8 +3,11 @@ import { cp, mkdir, rm } from "node:fs/promises";
 import { resolve } from "node:path";
 
 const output = resolve("release/codex-deck-launcher");
+const macOutput = resolve("release/codex-deck-launcher-macos");
 await rm(output, { recursive: true, force: true });
+await rm(macOutput, { recursive: true, force: true });
 await mkdir(output, { recursive: true });
+await mkdir(macOutput, { recursive: true });
 
 await build({
   entryPoints: [resolve("launcher/runtime-override.ts")],
@@ -21,3 +24,19 @@ await cp(resolve("node_modules/ws"), resolve(output, "node_modules/ws"), { recur
 for (const filename of ["Start Codex Deck.cmd", "Start-CodexDeck.ps1", "Watch-CodexDeck.ps1", "README.txt"]) {
   await cp(resolve("launcher", filename), resolve(output, filename));
 }
+
+await build({
+  entryPoints: [resolve("launcher/macos/codex-deck-macos.ts")],
+  outfile: resolve(macOutput, "codex-deck-macos.mjs"),
+  bundle: true,
+  platform: "node",
+  format: "esm",
+  target: "node20",
+  minify: false,
+  banner: { js: "import { createRequire as __createRequire } from 'node:module'; const require = __createRequire(import.meta.url);" }
+});
+
+for (const filename of ["start-codex-deck.sh", "Start Codex Deck.command"]) {
+  await cp(resolve("launcher", filename), resolve(macOutput, filename));
+}
+await cp(resolve("docs/MACOS.md"), resolve(macOutput, "README.md"));

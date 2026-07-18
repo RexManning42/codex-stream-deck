@@ -18,7 +18,7 @@ test("official Micro statuses map to the Stream Deck color states", () => {
 
 test("official keycap SVG contents are not bundled in the public source", async () => {
   const controller = await readFile(new URL("../src/controller.ts", import.meta.url), "utf8");
-  assert.match(controller, /CodexDeck[\s\S]*icons/);
+  assert.match(controller, /codexDeckStateRoot\(\)[\s\S]*icons/);
   assert.doesNotMatch(controller, /static\/imgs\/official/);
 });
 
@@ -27,7 +27,12 @@ test("renderer bridge uses native Micro events and discovers hashed modules at r
   for (const eventName of ["codex-micro-device-state-changed", "codex-micro-hid-event", "codex-micro-joystick-event"]) {
     assert.match(source, new RegExp(eventName));
   }
-  assert.match(source, /modulepreload/);
+  assert.match(source, /link\[href\], script\[src\]/);
+  assert.match(source, /performance\.getEntriesByType\('resource'\)/);
+  assert.match(source, /createSubscriberAtom/);
+  assert.match(source, /slots\.length === 6/);
+  assert.match(source, /codex-micro-agent-source/);
+  assert.doesNotMatch(source, /candidate\?\.token === appScope/);
   assert.doesNotMatch(source, /D90_rd6W|SFcKxWqG|DJFcGyy5/);
 });
 

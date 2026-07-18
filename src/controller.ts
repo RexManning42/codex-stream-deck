@@ -1,7 +1,7 @@
 import streamDeck, { type KeyAction } from "@elgato/streamdeck";
 import { readFile } from "node:fs/promises";
-import { homedir } from "node:os";
 import { join } from "node:path";
+import { codexDeckStateRoot } from "./codex-deck-paths.js";
 import { CodexMicroRendererBridge } from "./codex-micro-renderer-bridge.js";
 import type { OfficialKeycapId } from "./keycaps.js";
 import { renderAgentKey, renderBuiltinKeycap, renderFallbackKeycap, renderImportedKeycap, type BuiltinIconName } from "./render.js";
@@ -18,11 +18,7 @@ type AgentRegistration = { action: KeyAction; slot: number };
 type MicroActionRegistration = { action: KeyAction; slot: MicroActionSlot };
 type ActionIdentity = { id: string };
 
-const USER_ICON_ROOT = join(
-  process.env.LOCALAPPDATA ?? join(homedir(), "AppData", "Local"),
-  "CodexDeck",
-  "icons"
-);
+const USER_ICON_ROOT = join(codexDeckStateRoot(), "icons");
 
 export class DeckController {
   private readonly microBridge = new CodexMicroRendererBridge((message) => streamDeck.logger.info(message));

@@ -4,7 +4,7 @@ import { readFile } from "node:fs/promises";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
-import { buildRuntimeOverrideExpression } from "../launcher/runtime-override.js";
+import { buildRuntimeOverrideExpression, buildRuntimeVerificationExpression } from "../launcher/runtime-override.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -46,4 +46,21 @@ test("watcher recovery decision self-test passes in PowerShell", async () => {
     "-NoLogo", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", watcherPath, "-SelfTest"
   ]);
   assert.match(stdout, /self-test passed \(6 cases\)/i);
+});
+
+test("launcher supports the current shared-chunk native detection path", () => {
+  const expression = buildRuntimeOverrideExpression();
+  assert.match(expression, /native-device-event/);
+  assert.match(expression, /codex-micro-device-state-changed/);
+  assert.match(expression, /dispatchHostMessage/);
+  assert.match(expression, /deviceEventDispatched/);
+  assert.match(expression, /3207467860/);
+});
+
+test("launcher verifies the settings gate and native Micro handlers", () => {
+  const expression = buildRuntimeVerificationExpression();
+  assert.match(expression, /settings\/codex-micro/);
+  assert.match(expression, /codex-micro-hid-event/);
+  assert.match(expression, /codex-micro-joystick-event/);
+  assert.match(expression, /nativeEventBus/);
 });

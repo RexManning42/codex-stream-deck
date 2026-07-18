@@ -29,6 +29,19 @@ The watcher follows three safety rules:
 Stale port metadata is removed automatically. The bounded watcher log lives at
 `%LOCALAPPDATA%\CodexDeck\watcher.log`.
 
+On macOS, the launcher discovers the running or installed app by its signed
+bundle metadata, reads `CFBundleExecutable`, and launches the app bundle through
+LaunchServices with the same loopback-only debugging arguments. The per-user
+LaunchAgent watcher stores a main-process generation (PID, start time, and
+executable path), reuses healthy bridges, and performs at most one graceful
+recovery restart for a later unbridged generation. The generation and recovery
+policy is persisted atomically and guarded by a PID-directory lock.
+
+The macOS bridge state adds `platform`, `hostId`, `hostName`, and
+`codexVersion` while retaining the Windows-compatible `port` and `updatedAt`
+fields. `hostId` is intended as the future relay node identity; the CDP port is
+never a relay endpoint.
+
 ### Stream Deck plugin
 
 The plugin discovers the loopback port from the state file or from the command line of a running Codex process. It then uses Chrome DevTools Protocol `Runtime.evaluate` calls to:

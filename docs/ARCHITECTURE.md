@@ -82,6 +82,15 @@ Micro signals are unavailable. Snapshot failures are caught and rate-limited;
 they do not terminate the relay server or watcher. Normal snapshots resume
 automatically when the local bridge becomes ready.
 
+The relay emits an authenticated, typed `degraded` health event when its native
+snapshot source fails. The client also treats a snapshot as stale from its own
+receipt time, so clock differences between computers cannot hide a failure.
+Transport loss is a separate `offline` state. The controller preserves the
+last-known host snapshot to keep the six-key layout stable, overlays the health
+state on affected agent tiles, and uses the Windows/Mac target key as the
+host-wide health surface. Preserved data is display-only: command dispatch still
+requires a live authenticated connection.
+
 ### Rendering
 
 Agent keys are original deterministic SVGs generated in memory from task title and state. The status palette is:

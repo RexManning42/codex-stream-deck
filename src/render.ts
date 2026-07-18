@@ -1,4 +1,4 @@
-import type { AgentVisualStatus, ThemeMode } from "./types.js";
+import type { AgentVisualStatus, HostHealthState, ThemeMode } from "./types.js";
 
 export type BuiltinIconName = "back" | "forward" | "sidebar" | "home" | "navigation";
 
@@ -40,11 +40,11 @@ const SURFACES: Record<ThemeMode, SurfacePalette> = {
   }
 };
 
-export function renderAgentKey(slot: number, title: string, status: AgentVisualStatus, selected = false, phase = 0, theme: ThemeMode = "light", hostBadge?: string): string {
-  return toDataUrl(renderAgentSvg(slot, title, status, selected, phase, theme, hostBadge));
+export function renderAgentKey(slot: number, title: string, status: AgentVisualStatus, selected = false, phase = 0, theme: ThemeMode = "light", hostBadge?: string, hostHealth: HostHealthState = "ready"): string {
+  return toDataUrl(renderAgentSvg(slot, title, status, selected, phase, theme, hostBadge, hostHealth));
 }
 
-export function renderAgentSvg(_slot: number, title: string, status: AgentVisualStatus, selected = false, phase = 0, theme: ThemeMode = "light", hostBadge?: string): string {
+export function renderAgentSvg(_slot: number, title: string, status: AgentVisualStatus, selected = false, phase = 0, theme: ThemeMode = "light", hostBadge?: string, hostHealth: HostHealthState = "ready"): string {
   const surface = SURFACES[theme];
   const color = SIGNAL_COLORS[theme][status];
   const [line1, line2] = splitTitle(title);
@@ -76,6 +76,7 @@ export function renderAgentSvg(_slot: number, title: string, status: AgentVisual
     ${selected ? `<rect x="9" y="9" width="126" height="126" rx="14" fill="url(#selectedBloom)"/>` : ""}
     <rect x="12" y="12" width="120" height="120" rx="12" fill="url(#frost)" stroke="${surface.innerBorder}" stroke-width="1" opacity="${theme === "dark" ? ".86" : ".72"}"/>
     <path d="M18 21C46 12 99 12 126 23" fill="none" stroke="${surface.sheen}" stroke-width="6" stroke-linecap="round" opacity="${theme === "dark" ? "0" : ".68"}"/>
+    ${renderHostHealthMark(hostHealth, theme)}
     ${hostBadge ? `<g data-agent-host="${escapeXml(hostBadge)}"><rect x="108" y="16" width="20" height="18" rx="7" fill="${surface.title}" fill-opacity=".11"/><text x="118" y="29" text-anchor="middle" font-family="Bahnschrift, Segoe UI, Arial, sans-serif" font-size="11" font-weight="700" fill="${surface.title}" fill-opacity=".82">${escapeXml(hostBadge)}</text></g>` : ""}
     <g font-family="Bahnschrift, Segoe UI Variable Display, Segoe UI, Arial, sans-serif">${titleMarkup}</g>
     ${statusMark}
@@ -148,6 +149,27 @@ export function renderFallbackKeycap(keycapId: string, theme: ThemeMode = "light
   </svg>`);
 }
 
+export function renderHostTargetKey(label: "WIN" | "MAC", health: HostHealthState, theme: ThemeMode = "dark"): string {
+  const surface = SURFACES[theme];
+  const signal = health === "ready" ? "#35D86B" : health === "degraded" ? SIGNAL_COLORS[theme].input
+    : health === "offline" ? SIGNAL_COLORS[theme].error : SIGNAL_COLORS[theme].empty;
+  const status = health === "ready" ? "READY" : health === "degraded" ? "DEGRADED"
+    : health === "offline" ? "OFFLINE" : "CONNECT";
+  return toDataUrl(`<svg xmlns="http://www.w3.org/2000/svg" width="144" height="144" viewBox="0 0 144 144">
+    <defs>
+      <linearGradient id="keycap" x1="0" y1="0" x2="0" y2="1"><stop stop-color="${surface.keyTop}"/><stop offset=".52" stop-color="${surface.keyMiddle}"/><stop offset="1" stop-color="${surface.keyBottom}"/></linearGradient>
+      <radialGradient id="hostBloom" cx="50%" cy="100%" r="78%"><stop stop-color="${signal}" stop-opacity=".36"/><stop offset="1" stop-color="${signal}" stop-opacity="0"/></radialGradient>
+      <filter id="hostGlow" x="-30%" y="-30%" width="160%" height="160%"><feGaussianBlur stdDeviation="4"/></filter>
+    </defs>
+    <rect data-theme="${theme}" x="4" y="4" width="136" height="136" rx="18" fill="url(#keycap)" stroke="${surface.border}" stroke-width="2" stroke-opacity="${theme === "dark" ? ".88" : ".34"}"/>
+    <rect data-host-health="${health}" x="7.5" y="7.5" width="129" height="129" rx="15" fill="url(#hostBloom)" stroke="${signal}" stroke-width="2" stroke-opacity="${health === "ready" ? ".34" : ".82"}"/>
+    ${health === "degraded" || health === "offline" ? `<rect x="8" y="8" width="128" height="128" rx="15" fill="none" stroke="${signal}" stroke-width="7" stroke-opacity=".24" filter="url(#hostGlow)"/>` : ""}
+    <text x="72" y="69" text-anchor="middle" font-family="Bahnschrift, Segoe UI Variable Display, Segoe UI, Arial, sans-serif" font-size="27" font-weight="700" letter-spacing="1.4" fill="${surface.title}">${label}</text>
+    <circle cx="72" cy="91" r="5" fill="${signal}"/><circle cx="72" cy="91" r="11" fill="${signal}" fill-opacity=".10"/>
+    <text x="72" y="116" text-anchor="middle" font-family="Bahnschrift, Segoe UI Variable Display, Segoe UI, Arial, sans-serif" font-size="${health === "degraded" ? 11 : 12}" font-weight="700" letter-spacing="1" fill="${signal}">${status}</text>
+  </svg>`);
+}
+
 export function escapeXml(value: string): string {
   return value.replace(/[&<>'"]/g, (character) => ({
     "&": "&amp;", "<": "&lt;", ">": "&gt;", "'": "&apos;", "\"": "&quot;"
@@ -193,4 +215,17 @@ function renderAgentStatusMark(status: AgentVisualStatus, color: string, phase: 
   if (status === "error") return `<g data-agent-motion="error" fill="none" stroke="${color}" stroke-width="5" stroke-linecap="round"><circle cx="72" cy="108" r="17"/><path d="M65 101l14 14M79 101l-14 14"/></g>`;
   if (status === "empty") return `<rect x="59" y="106" width="26" height="4" rx="2" fill="${color}" fill-opacity=".32"/>`;
   return `<circle data-agent-motion="idle" cx="72" cy="108" r="5" fill="${color}" fill-opacity=".76"/><circle cx="72" cy="108" r="12" fill="${color}" fill-opacity=".07"/>`;
+}
+
+function renderHostHealthMark(health: HostHealthState, theme: ThemeMode): string {
+  if (health === "ready") return "";
+  if (health === "degraded") {
+    const color = SIGNAL_COLORS[theme].input;
+    return `<g data-agent-host-health="degraded"><path d="M25 15l11 20H14z" fill="${color}"/><text x="25" y="31" text-anchor="middle" font-family="Arial, sans-serif" font-size="14" font-weight="900" fill="#17191B">!</text></g>`;
+  }
+  if (health === "offline") {
+    const color = SIGNAL_COLORS[theme].error;
+    return `<g data-agent-host-health="offline" fill="${color}"><circle cx="25" cy="25" r="11"/><path d="M20 20l10 10m0-10L20 30" fill="none" stroke="#FFFFFF" stroke-width="3" stroke-linecap="round"/></g>`;
+  }
+  return `<g data-agent-host-health="connecting" fill="${SIGNAL_COLORS[theme].empty}"><circle cx="18" cy="25" r="2.5"/><circle cx="25" cy="25" r="2.5"/><circle cx="32" cy="25" r="2.5"/></g>`;
 }

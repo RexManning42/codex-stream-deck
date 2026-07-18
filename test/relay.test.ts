@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { createServer } from "node:net";
 import test from "node:test";
 import WebSocket from "ws";
+import { CodexRelayClient, RELAY_SNAPSHOT_STALE_MS, resolveRelayHealth } from "../src/codex-relay-client.js";
 import { isAllowedRelayHost } from "../src/relay-network.js";
 import { CodexRelayServer, validateRelayServerConfig } from "../src/codex-relay-server.js";
 import { HostActivityIndex, RELAY_PROTOCOL_VERSION, parseRelayCommand } from "../src/relay-protocol.js";
@@ -56,6 +57,24 @@ test("relay snapshot parser bounds and validates host session catalogs", async (
   const invalid = structuredClone(valid) as typeof valid & { snapshot: { hostSessions: unknown[] } };
   invalid.snapshot.hostSessions = Array.from({ length: 129 }, () => valid.snapshot.hostSessions![0]!);
   assert.equal(parseRelayServerMessage(invalid), null);
+  assert.notEqual(parseRelayServerMessage({
+    type: "health", protocol: 1, host, state: "degraded",
+    reason: "native-signals-unavailable", observedAt: 2
+  }), null);
+  assert.equal(parseRelayServerMessage({
+    type: "health", protocol: 1, host, state: "offline",
+    reason: "native-signals-unavailable", observedAt: 2
+  }), null);
+});
+
+test("relay health becomes degraded from local receipt age without trusting remote clocks", () => {
+  const ready = { state: "ready", changedAt: 900 } as const;
+  assert.equal(resolveRelayHealth(ready, true, 1_000, 1_000 + RELAY_SNAPSHOT_STALE_MS).state, "ready");
+  assert.deepEqual(resolveRelayHealth(ready, true, 1_000, 1_001 + RELAY_SNAPSHOT_STALE_MS), {
+    state: "degraded", reason: "snapshot-stale", changedAt: 1_000
+  });
+  const offline = { state: "offline", reason: "relay-disconnected", changedAt: 2_000 } as const;
+  assert.equal(resolveRelayHealth(offline, true, 1_000, 99_000), offline);
 });
 
 test("host activity merge globally orders explicit Mac and Windows timestamps", () => {
@@ -429,11 +448,39 @@ test("authenticated relay survives an unavailable Codex snapshot", async () => {
   await onceOpen(socket);
   socket.send(JSON.stringify({ type: "auth", protocol: RELAY_PROTOCOL_VERSION, token: "t".repeat(32) }));
   assert.equal((await messages.next()).type, "ready");
-  await new Promise((resolve) => setTimeout(resolve, 50));
+  const health = await messages.next();
+  assert.equal(health.type, "health");
+  assert.equal(health.state, "degraded");
+  assert.equal(health.reason, "native-signals-unavailable");
   assert.equal(socket.readyState, WebSocket.OPEN);
   assert.equal(logs.filter((message) => message.includes("bridge offline")).length, 1);
   socket.close();
   await server.close();
+});
+
+test("relay client preserves last-known tasks but marks their host offline after disconnect", async () => {
+  const port = await freePort();
+  const control = {
+    refresh: async () => snapshot,
+    sendAgent: async () => {}, sendAction: async () => {}, sendJoystick: async () => {},
+    sendEncoder: async () => {}, adjustReasoning: async () => {}, runKeycap: async () => {}
+  };
+  const server = new CodexRelayServer(
+    { enabled: true, listenHost: "127.0.0.1", port, token: "t".repeat(32) }, host, control, () => {}
+  );
+  await server.start();
+  const client = new CodexRelayClient(
+    { enabled: true, url: `ws://127.0.0.1:${port}`, token: "t".repeat(32) }, () => {}, () => {}
+  );
+  client.start();
+  await waitUntil(() => client.currentHealth().state === "ready");
+  const lastKnown = client.currentSnapshot();
+  assert.equal(lastKnown?.snapshot.slots[0]?.title, "Task 1");
+  await server.close();
+  await waitUntil(() => client.currentHealth().state === "offline");
+  assert.equal(client.currentSnapshot(), lastKnown);
+  assert.equal(client.isConnected(), false);
+  client.close();
 });
 
 async function freePort(): Promise<number> {
@@ -451,6 +498,14 @@ async function onceOpen(socket: WebSocket): Promise<void> {
     socket.once("open", resolve);
     socket.once("error", reject);
   });
+}
+
+async function waitUntil(predicate: () => boolean, timeoutMs = 2_000): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (!predicate()) {
+    if (Date.now() >= deadline) throw new Error("Timed out waiting for relay state.");
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
 }
 
 function messageQueue(socket: WebSocket): { next: () => Promise<Record<string, unknown>> } {

@@ -31,6 +31,7 @@ Windows-only and Mac-only mode have no relay, no second computer dependency, and
 - Standalone actions for all official single-size keycaps, resolved from the installed Codex build at runtime.
 - Optional local loading of official keycap SVGs; those protected files are never included in this repository or its releases.
 - Optional authenticated SSH/Tailscale relay for one Stream Deck controlling Windows and Mac Codex together.
+- Per-host health on the Windows/Mac target key, with last-known agent tiles visibly marked when native desktop signals are uncertain or the relay is offline.
 
 ## Requirements
 
@@ -71,7 +72,7 @@ The action names describe the default Codex Micro setup. The keys always follow 
 
 ### Page 2 — navigation and reasoning
 
-| Windows / Mac Target² | Empty | Joystick Up / Plan | Reasoning Down | Reasoning Up |
+| Windows / Mac Target + Health² | Empty | Joystick Up / Plan | Reasoning Down | Reasoning Up |
 |---|---|---|---|---|
 | Empty | Joystick Left / Back | Stream Deck: Previous Page | Joystick Right / Forward | Reasoning Encoder Click |
 | Stream Deck: Switch Profile³ | Empty | Joystick Down / Sidebar | Empty | New Task |

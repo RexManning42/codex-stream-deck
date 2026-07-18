@@ -8,10 +8,10 @@ import { CodexMicroRendererBridge } from "./codex-micro-renderer-bridge.js";
 import { getOrCreateHostIdentity } from "./host-identity.js";
 import type { OfficialKeycapId } from "./keycaps.js";
 import { HostActivityIndex, type HostSnapshot, type RelayCommand } from "./relay-protocol.js";
-import { renderAgentKey, renderBuiltinKeycap, renderFallbackKeycap, renderImportedKeycap, type BuiltinIconName } from "./render.js";
+import { renderAgentKey, renderBuiltinKeycap, renderFallbackKeycap, renderHostTargetKey, renderImportedKeycap, type BuiltinIconName } from "./render.js";
 import { openCodexThread } from "./codex-open.js";
 import { visualStatusFromMicro } from "./status.js";
-import type { CodexHost, MicroActionSlot, MicroDirection, MicroSnapshot, ReasoningAdjustment, RoutedAgentSlot } from "./types.js";
+import type { CodexHost, HostHealth, MicroActionSlot, MicroDirection, MicroSnapshot, ReasoningAdjustment, RoutedAgentSlot } from "./types.js";
 
 export type FixedIconSource =
   | { kind: "local"; keycapId: string }
@@ -41,6 +41,7 @@ export class DeckController {
   private routedSlots: RoutedAgentSlot[] = [];
   private targetHostId?: string;
   private targetPlatform: ControlTarget = "win32";
+  private localHealth: HostHealth = { state: "connecting", reason: "awaiting-snapshot", changedAt: Date.now() };
   private poll?: NodeJS.Timeout;
   private animation?: NodeJS.Timeout;
   private stopped = false;
@@ -50,6 +51,7 @@ export class DeckController {
   private lastStatusSignature = "";
   private lastLayoutSignature = "";
   private lastAgentSourceSignature = "";
+  private lastHostHealthSignature = "";
 
   async start(): Promise<void> {
     this.stopped = false;
@@ -173,9 +175,10 @@ export class DeckController {
       const snapshot = await this.microBridge.refresh();
       if (!this.localHost) this.localHost = await getOrCreateHostIdentity();
       this.localSnapshot = { host: this.localHost, snapshot, observedAt: Date.now() };
+      this.localHealth = { state: "ready", changedAt: Date.now() };
       this.lastError = "";
     } catch (error) {
-      this.localSnapshot = undefined;
+      this.localHealth = { state: "degraded", reason: "local-bridge-unavailable", changedAt: Date.now() };
       const message = String(error);
       if (message !== this.lastError) {
         this.lastError = message;
@@ -190,6 +193,16 @@ export class DeckController {
     if (this.localHost && this.targetPlatform !== this.localHost.platform && remoteSnapshot) this.targetHostId = remoteSnapshot.host.hostId;
     else if (this.localHost && this.targetPlatform === this.localHost.platform) this.targetHostId = this.localHost.hostId;
     const inputs = [this.localSnapshot, remoteSnapshot].filter((value): value is HostSnapshot => value != null);
+    const remoteHealth: HostHealth = this.relayClient?.currentHealth() ?? {
+      state: "offline",
+      reason: "relay-disconnected",
+      changedAt: Date.now()
+    };
+    const healthSignature = `local=${this.localHealth.state}:${this.localHealth.reason ?? ""},remote=${remoteHealth.state}:${remoteHealth.reason ?? ""}`;
+    if (healthSignature !== this.lastHostHealthSignature) {
+      this.lastHostHealthSignature = healthSignature;
+      streamDeck.logger.info(`Codex host health: ${healthSignature}`);
+    }
     const agentSources = inputs.map((input) => `${input.host.platform}=${input.snapshot.agentSource}`);
     const agentSourceSignature = agentSources.join(",");
     if (agentSourceSignature !== this.lastAgentSourceSignature) {
@@ -233,11 +246,15 @@ export class DeckController {
 
   private async renderAgent({ action, slot }: AgentRegistration): Promise<void> {
     const agent = this.routedSlots[slot];
-    const title = agent?.title ?? (this.localSnapshot || this.relayClient?.currentSnapshot() ? "Not assigned" : "Bridge offline");
+    const health = agent ? this.healthForHost(agent.host) : this.targetHealth();
+    const unavailableTitle = health.state === "degraded" ? "Signals uncertain"
+      : health.state === "offline" ? "Host offline"
+        : health.state === "connecting" ? "Connecting" : "Not assigned";
+    const title = agent?.title ?? unavailableTitle;
     const status = agent ? visualStatusFromMicro(agent.status) : "empty";
     const theme = this.targetSnapshot()?.theme ?? this.localSnapshot?.snapshot.theme ?? "dark";
     const hostBadge = agent && this.relayClient ? (agent.host.platform === "darwin" ? "M" : "W") : undefined;
-    await this.setImage(action, renderAgentKey(slot, title, status, agent?.selected ?? false, this.animationFrame, theme, hostBadge));
+    await this.setImage(action, renderAgentKey(slot, title, status, agent?.selected ?? false, this.animationFrame, theme, hostBadge, health.state));
   }
 
   private async renderAnimatedAgents(): Promise<void> {
@@ -271,7 +288,18 @@ export class DeckController {
   private async renderHostToggle(action: KeyAction): Promise<void> {
     const label = this.targetPlatform === "darwin" ? "MAC" : "WIN";
     const theme = this.targetSnapshot()?.theme ?? "dark";
-    await this.setImage(action, renderFallbackKeycap(label, theme));
+    await this.setImage(action, renderHostTargetKey(label, this.targetHealth().state, theme));
+  }
+
+  private targetHealth(): HostHealth {
+    if (!this.localHost || this.targetPlatform === this.localHost.platform) return this.localHealth;
+    return this.relayClient?.currentHealth() ?? { state: "offline", reason: "relay-disconnected", changedAt: Date.now() };
+  }
+
+  private healthForHost(host: CodexHost): HostHealth {
+    if (host.hostId === this.localHost?.hostId) return this.localHealth;
+    if (host.hostId === this.relayClient?.currentHost()?.hostId) return this.relayClient!.currentHealth();
+    return { state: "offline", reason: "relay-disconnected", changedAt: Date.now() };
   }
 
   private targetSnapshot(): MicroSnapshot | undefined {

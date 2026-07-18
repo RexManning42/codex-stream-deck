@@ -22,9 +22,17 @@ export type RelaySnapshotMessage = {
   observedAt: number;
   snapshot: MicroSnapshot;
 };
+export type RelayHealthMessage = {
+  type: "health";
+  protocol: 1;
+  host: CodexHost;
+  state: "degraded";
+  reason: "native-signals-unavailable";
+  observedAt: number;
+};
 export type RelayCommandMessage = { type: "command"; protocol: 1; requestId: string; command: RelayCommand };
 export type RelayResultMessage = { type: "result"; protocol: 1; requestId: string; ok: boolean; error?: string };
-export type RelayServerMessage = RelayReadyMessage | RelaySnapshotMessage | RelayResultMessage;
+export type RelayServerMessage = RelayReadyMessage | RelaySnapshotMessage | RelayHealthMessage | RelayResultMessage;
 
 export type HostSnapshot = { host: CodexHost; snapshot: MicroSnapshot; observedAt: number };
 
@@ -162,6 +170,10 @@ export function parseRelayServerMessage(value: unknown): RelayServerMessage | nu
   if (value.type === "ready" && isHost(value.host)) return value as RelayReadyMessage;
   if (value.type === "snapshot" && isHost(value.host) && Number.isFinite(value.observedAt) && isSnapshot(value.snapshot)) {
     return value as RelaySnapshotMessage;
+  }
+  if (value.type === "health" && isHost(value.host) && value.state === "degraded" &&
+      value.reason === "native-signals-unavailable" && Number.isFinite(value.observedAt)) {
+    return value as RelayHealthMessage;
   }
   if (value.type === "result" && typeof value.requestId === "string" && typeof value.ok === "boolean") {
     return value as RelayResultMessage;

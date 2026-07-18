@@ -5,7 +5,8 @@ import type { OfficialKeycapId } from "./keycaps.js";
 import type { CodexMicroRendererBridge } from "./codex-micro-renderer-bridge.js";
 import {
   RELAY_PROTOCOL_VERSION, parseRelayCommand,
-  type RelayAuthMessage, type RelayCommand, type RelayCommandMessage, type RelayResultMessage, type RelaySnapshotMessage
+  type RelayAuthMessage, type RelayCommand, type RelayCommandMessage, type RelayHealthMessage,
+  type RelayResultMessage, type RelaySnapshotMessage
 } from "./relay-protocol.js";
 import type { CodexHost } from "./types.js";
 
@@ -26,6 +27,7 @@ export class CodexRelayServer {
   private readonly authenticated = new Set<WebSocket>();
   private lastSnapshotError = "";
   private lastSnapshotErrorAt = 0;
+  private degraded = false;
 
   constructor(
     private readonly config: RelayServerConfig,
@@ -81,7 +83,7 @@ export class CodexRelayServer {
       });
       socket.on("close", () => this.authenticated.delete(socket));
       socket.on("error", () => this.authenticated.delete(socket));
-      void this.publishSnapshot(socket).catch((error) => this.reportSnapshotError(error));
+      void this.publishSnapshot(socket).catch((error) => this.handleSnapshotFailure(error, socket));
     });
     socket.on("close", () => clearTimeout(authTimer));
   }
@@ -113,7 +115,7 @@ export class CodexRelayServer {
     if (!this.server) return;
     this.poll = setTimeout(async () => {
       try { if (this.authenticated.size) await this.publishSnapshot(); }
-      catch (error) { this.reportSnapshotError(error); }
+      catch (error) { this.handleSnapshotFailure(error); }
       finally { this.scheduleSnapshot(); }
     }, delay);
   }
@@ -127,8 +129,27 @@ export class CodexRelayServer {
     this.log(`Relay snapshot unavailable: ${message}`);
   }
 
+  private handleSnapshotFailure(error: unknown, only?: WebSocket): void {
+    this.reportSnapshotError(error);
+    const health: RelayHealthMessage = {
+      type: "health",
+      protocol: RELAY_PROTOCOL_VERSION,
+      host: this.host,
+      state: "degraded",
+      reason: "native-signals-unavailable",
+      observedAt: Date.now()
+    };
+    const encoded = JSON.stringify(health);
+    const recipients = !this.degraded ? this.authenticated : only ? new Set([only]) : [];
+    this.degraded = true;
+    for (const socket of recipients) {
+      if (socket.readyState === WebSocket.OPEN) socket.send(encoded);
+    }
+  }
+
   private async publishSnapshot(only?: WebSocket): Promise<void> {
     const message = await this.currentSnapshotMessage();
+    this.degraded = false;
     this.lastSnapshotError = "";
     this.lastSnapshotErrorAt = 0;
     const encoded = JSON.stringify(message);

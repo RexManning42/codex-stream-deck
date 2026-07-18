@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+- Added explicit per-host `READY`, `DEGRADED`, `CONNECT`, and `OFFLINE` state to the Windows/Mac target key.
+- Native-signal failures now emit a typed relay health event instead of leaving an authenticated connection looking healthy.
+- Detect stale remote snapshots from local receipt time, independent of clock differences between hosts.
+- Preserve last-known task placement during host failures while marking every affected agent tile orange for uncertain native signals or red for an offline relay; commands still fail safely instead of falling through to another host.
+
 ## 0.6.1 - 2026-07-18
 
 - Fixed a macOS restart loop after an unexpected shutdown when an authenticated Windows relay requested a snapshot before the Codex Micro signals were ready.

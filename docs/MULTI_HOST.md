@@ -40,6 +40,8 @@ On Windows, run the matching configurator and omit `-Token` so the secret is ent
 
 The persistent Windows watcher maintains this dedicated tunnel after sign-in and reconnects it after network interruptions. It does not adopt or depend on Codex desktop's remote-CLI SSH process.
 
+The Mac relay can remain authenticated while the Mac Codex app is closed or still loading. Snapshot failures are contained and rate-limited; they do not crash the watcher. Once the native Micro bridge is ready, snapshots resume over the existing connection.
+
 Restart only the Stream Deck plugin or Stream Deck app after pairing. Do not restart Codex.
 
 ## Pair with Tailscale

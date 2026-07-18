@@ -34,8 +34,12 @@ bundle metadata, reads `CFBundleExecutable`, and launches the app bundle through
 LaunchServices with the same loopback-only debugging arguments. The per-user
 LaunchAgent watcher stores a main-process generation (PID, start time, and
 executable path), reuses healthy bridges, and performs at most one graceful
-recovery restart for a later unbridged generation. The generation and recovery
-policy is persisted atomically and guarded by a PID-directory lock.
+recovery restart for a later stable unbridged generation. It never launches a
+closed Codex app. A generation-independent cooldown prevents a failed recovery
+from becoming a PID-to-PID restart loop, even if LaunchServices immediately
+creates another process. The generation and recovery policy is persisted
+atomically and guarded by a PID-directory lock. LaunchAgent stderr is retained
+separately from the bounded watcher log for post-crash diagnosis.
 
 Both platforms persist a stable `hostId`, `hostName`, and platform identifier.
 The relay uses that identity; the CDP port is never a relay endpoint.
@@ -72,6 +76,11 @@ The relay protocol has no arbitrary-evaluation, filesystem, shell, or raw-CDP
 operation. Payloads are capped at 64 KiB, authentication is required before a
 snapshot or command is accepted, and command results use request IDs with
 bounded timeouts.
+
+An authenticated client may remain connected while the Mac app or its native
+Micro signals are unavailable. Snapshot failures are caught and rate-limited;
+they do not terminate the relay server or watcher. Normal snapshots resume
+automatically when the local bridge becomes ready.
 
 ### Rendering
 

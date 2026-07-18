@@ -30,7 +30,7 @@ chmod +x start-codex-deck.sh "Start Codex Deck.command"
 ./start-codex-deck.sh install
 ```
 
-`install` copies the watcher runtime into Application Support and installs a per-user LaunchAgent. It does not restart a normal Codex session already open during first installation. A later unbridged Codex generation may receive one graceful recovery restart; the same generation is never restarted repeatedly.
+`install` copies the watcher runtime into Application Support and installs a per-user LaunchAgent. It does not restart a normal Codex session already open during first installation and never launches Codex while the app is closed. After you open Codex normally, a later unbridged process must remain stable before it may receive one graceful recovery restart. A global cooldown blocks further automatic recovery across replacement process IDs, preventing restart loops after crashes, power loss, or incomplete app startup.
 
 Update by extracting the new launcher and running `install` again. The stable host identity, optional relay configuration, and user-owned icons are preserved.
 
@@ -56,6 +56,7 @@ Update by extracting the new launcher and running `install` again. The stable ho
   host.json
   watcher-state.json
   watcher.log, watcher.log.1 ...
+  watcher.stderr.log             # LaunchAgent/runtime failures
   icons/                         # optional user-owned SVG copies
 
 ~/Library/LaunchAgents/com.simeo.codex-deck.watcher.plist
@@ -68,6 +69,7 @@ State writes are atomic, a PID-directory lock prevents duplicate watchers, and l
 ```zsh
 ./start-codex-deck.sh dry-run
 tail -n 100 "$HOME/Library/Application Support/CodexDeck/watcher.log"
+tail -n 100 "$HOME/Library/Application Support/CodexDeck/watcher.stderr.log"
 launchctl print "gui/$(id -u)/com.simeo.codex-deck.watcher"
 plutil -lint "$HOME/Library/LaunchAgents/com.simeo.codex-deck.watcher.plist"
 ```

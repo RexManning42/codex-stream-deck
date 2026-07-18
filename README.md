@@ -138,7 +138,7 @@ The Windows physical-device path and the Windows+Mac relay were exercised on the
 
 ## Troubleshooting
 
-Start with [Troubleshooting](docs/TROUBLESHOOTING.md). The important rule is: restart only the Stream Deck plugin/app for plugin updates. Do not restart Codex unless the launcher explicitly says an unbridged Codex generation needs one recovery restart and you choose to proceed.
+Start with [Troubleshooting](docs/TROUBLESHOOTING.md). The important rule is: restart only the Stream Deck plugin/app for plugin updates. The macOS watcher never launches a closed Codex app; after a manual app start it permits at most one guarded recovery restart and opens a global cooldown before any later recovery.
 
 ## Build and release validation
 

@@ -2,6 +2,9 @@
 
 ## 0.6.1 - 2026-07-18
 
+- Fixed a macOS restart loop after an unexpected shutdown when an authenticated Windows relay requested a snapshot before the Codex Micro signals were ready.
+- The macOS watcher no longer launches Codex while the app is closed, waits for an unbridged process to stabilize, and uses a generation-independent recovery cooldown to prevent PID-to-PID restart loops.
+- Added safe relay error handling, rate-limited offline diagnostics, and a dedicated macOS watcher stderr log.
 - Fixed macOS Codex updates exposing avatar-overlay renderer targets before the real main window, which could stop relay snapshots and leave an agent key stuck in `working`.
 - Fixed remote agent commands for nested `local:client-new-thread:` task identities being rejected by the relay validator.
 - Read the live agent-source setting directly from Codex instead of falling back to Recently updated after app updates.

@@ -3,6 +3,7 @@ import { DeckController } from "./controller.js";
 import {
   Agent1, Agent2, Agent3, Agent4, Agent5, Agent6,
   Approve, Back, Decline, Dictation, Fast, Fork, Forward, NewTask,
+  HostToggle,
   KeycapAddFiles, KeycapAddPhotos, KeycapApprove, KeycapArchive, KeycapBranch, KeycapBrowser,
   KeycapBug, KeycapCodex, KeycapDiff, KeycapDownload, KeycapGitCommit, KeycapLab,
   KeycapFast, KeycapMerge, KeycapNewTask, KeycapOpenAiDocs, KeycapOpenFolder, KeycapPin, KeycapPlay,
@@ -19,6 +20,7 @@ for (const pluginAction of [
   new Fast(controller), new Approve(controller), new Decline(controller),
   new Fork(controller), new Dictation(controller), new Send(controller),
   new Plan(controller), new Reasoning(controller), new ReasoningDown(controller), new ReasoningUp(controller), new NewTask(controller),
+  new HostToggle(controller),
   new Back(controller), new Forward(controller), new Sidebar(controller),
   new KeycapFast(controller), new KeycapApprove(controller), new KeycapReject(controller),
   new KeycapSplit(controller), new KeycapNewTask(controller), new KeycapReasoningUp(controller),

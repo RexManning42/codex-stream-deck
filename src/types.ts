@@ -7,6 +7,9 @@ export type MicroAgentSlot = {
   title: string | null;
   status: string;
   selected: boolean;
+  activityAt?: number;
+  /** True when this host has the backing Codex rollout file for the task. */
+  ownedByHost?: boolean;
 };
 
 export type MicroActionSlot = "ACT06" | "ACT07" | "ACT08" | "ACT09" | "ACT10_ACT11" | "ACT12";
@@ -25,4 +28,16 @@ export type MicroSnapshot = {
   agentSource: "pinned" | "recent" | "priority" | "custom";
   lightingAutoOff: string;
   theme: ThemeMode;
+};
+
+export type CodexHost = {
+  hostId: string;
+  hostName: string;
+  platform: "win32" | "darwin";
+};
+
+export type RoutedAgentSlot = MicroAgentSlot & {
+  host: CodexHost;
+  sourceSlot: number;
+  observedAt: number;
 };

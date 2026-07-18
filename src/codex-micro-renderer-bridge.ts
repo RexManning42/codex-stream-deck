@@ -1,10 +1,11 @@
 import { execFile } from "node:child_process";
 import { readFile } from "node:fs/promises";
-import { homedir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
 import WebSocket from "ws";
+import { codexDeckStateRoot } from "./codex-deck-paths.js";
 import { OFFICIAL_KEYCAP_IDS, type OfficialKeycapId } from "./keycaps.js";
+import { CodexSessionOwnershipIndex } from "./session-ownership.js";
 import type { MicroActionSlot, MicroDirection, MicroSnapshot, ReasoningAdjustment } from "./types.js";
 
 type DebugTarget = {
@@ -20,7 +21,7 @@ type CdpResponse = {
 };
 
 const execFileAsync = promisify(execFile);
-const PORT_FILE = join(process.env.LOCALAPPDATA ?? join(homedir(), "AppData", "Local"), "CodexDeck", "codex-micro-bridge.json");
+const PORT_FILE = join(codexDeckStateRoot(), "codex-micro-bridge.json");
 const DEVICE_STATE = {
   type: "codex-micro-device-state-changed",
   state: { status: "connected", error: null, battery: { percentage: 100, isCharging: true } }
@@ -32,26 +33,26 @@ export const REASONING_COMMANDS: Record<ReasoningAdjustment, string> = {
 };
 
 const SNAPSHOT_EXPRESSION = `(async () => {
-  const hrefs = [...document.querySelectorAll('link[rel="modulepreload"]')].map((link) => link.href);
-  const moduleUrl = (prefix) => hrefs.find((href) => href.includes('/assets/' + prefix));
-  const required = ['app-scope-', 'codex-micro-slot-signals-', 'vscode-api-', 'src-', 'use-reduced-motion-'];
-  const urls = Object.fromEntries(required.map((prefix) => [prefix, moduleUrl(prefix)]));
-  if (Object.values(urls).some((value) => !value)) throw new Error('Codex Micro renderer modules are not loaded.');
+  const urls = [...new Set([
+    ...[...document.querySelectorAll('link[href], script[src]')].map((element) => element.href || element.src),
+    ...performance.getEntriesByType('resource').map((entry) => entry.name)
+  ])].filter((url) => url.includes('/assets/') && url.endsWith('.js'));
+  const slotSignalsUrl = urls.find((url) => url.includes('/assets/codex-micro-slot-signals-'));
+  if (!slotSignalsUrl) throw new Error('Codex Micro slot signals are not loaded.');
 
-  const [appScope, slotSignals, vscode, source, settings] = await Promise.all([
-    import(urls['app-scope-']),
-    import(urls['codex-micro-slot-signals-']),
-    import(urls['vscode-api-']),
-    import(urls['src-']),
-    import(urls['use-reduced-motion-'])
-  ]);
-  const settingStorageUrl = moduleUrl('setting-storage-');
-  const settingStorage = settingStorageUrl ? await import(settingStorageUrl) : null;
-  const definitions = vscode.Et ?? source.P;
-  const getSetting = settingStorage?.r ?? settings.u;
-  if (!definitions || typeof getSetting !== 'function') throw new Error('Codex Micro settings API was not found.');
+  const namespaces = [];
+  for (const url of urls) {
+    try { namespaces.push(await import(url)); } catch {}
+  }
+  const exportedValues = namespaces.flatMap((namespace) => Object.values(namespace));
+  const definitions = exportedValues.find((candidate) =>
+    candidate && typeof candidate === 'object' &&
+    candidate.layout?.key === 'codex-micro-layout' &&
+    candidate.agentSource?.key === 'codex-micro-agent-source'
+  );
+  if (!definitions) throw new Error('Codex Micro settings definitions were not found.');
 
-  const bus = [vscode.g, vscode.m, ...Object.values(vscode)].find((candidate) => candidate && typeof candidate === 'object' && candidate.handlers instanceof Map && (typeof candidate.dispatchHostMessage === 'function' || typeof candidate.dispatchMessage === 'function'));
+  const bus = exportedValues.find((candidate) => candidate && typeof candidate === 'object' && candidate.handlers instanceof Map && (typeof candidate.dispatchHostMessage === 'function' || typeof candidate.dispatchMessage === 'function'));
   if (!bus) throw new Error('Codex VS Code event bus was not found.');
   const dispatch = bus.dispatchHostMessage ?? bus.dispatchMessage;
   if ((bus.handlers.get('codex-micro-hid-event')?.size ?? 0) === 0) {
@@ -60,6 +61,14 @@ const SNAPSHOT_EXPRESSION = `(async () => {
   const root = document.getElementById('root');
   const reactKey = root && Object.getOwnPropertyNames(root).find((key) => key.startsWith('__reactContainer$'));
   if (!root || !reactKey) throw new Error('Codex React root was not found.');
+
+  const slotSignals = await import(slotSignalsUrl);
+  const resolvers = Object.values(slotSignals).filter((candidate) =>
+    candidate && typeof candidate === 'object' &&
+    typeof candidate.resolve === 'function' &&
+    typeof candidate.createSubscriberAtom === 'function'
+  );
+  if (resolvers.length === 0) throw new Error('Codex Micro slot resolver was not found.');
 
   let queue = [root[reactKey]];
   const seen = new Set();
@@ -76,20 +85,62 @@ const SNAPSHOT_EXPRESSION = `(async () => {
       dependency = dependency.next;
     }
     for (const chain of maps) {
-      const node = [...chain.values()].find((candidate) => candidate?.token === appScope.t);
-      if (node) { found = { chain, node }; break; }
+      for (const node of chain.values()) {
+        if (!node?.store || typeof node.store.get !== 'function') continue;
+        for (const resolver of resolvers) {
+          try {
+            const atom = resolver.resolve(node, chain);
+            const slots = node.store.get(atom);
+            if (Array.isArray(slots) && slots.length === 6 && slots.every((slot, index) => slot?.id === index)) {
+              found = { chain, node, slots };
+              break;
+            }
+          } catch {}
+        }
+        if (found) break;
+      }
+      if (found) break;
     }
     queue.push(fiber.child, fiber.sibling);
   }
-  if (!found) throw new Error('Codex AppScope store was not found.');
+  if (!found) throw new Error('Codex Micro slot store was not found.');
 
-  const atom = slotSignals.n.resolve(found.node, found.chain);
-  const slots = found.node.store.get(atom);
-  const [layout, agentSource, lightingAutoOff] = await Promise.all([
-    getSetting(definitions.layout),
-    getSetting(definitions.agentSource),
-    getSetting(definitions.lightingAutoOff)
-  ]);
+  let layout = definitions.layout.default;
+  let agentSource = definitions.agentSource.default;
+  let lightingAutoOff = definitions.lightingAutoOff?.default ?? '3-minutes';
+  const settingReaders = exportedValues.filter((candidate) => {
+    if (typeof candidate !== 'function' || candidate.length !== 2) return false;
+    const source = Function.prototype.toString.call(candidate);
+    return source.includes('.key') && source.includes('.default');
+  });
+  for (const readSetting of settingReaders) {
+    try {
+      const candidateLayout = await readSetting(found.node.store.get, definitions.layout);
+      const candidateAgentSource = await readSetting(found.node.store.get, definitions.agentSource);
+      const candidateLightingAutoOff = definitions.lightingAutoOff
+        ? await readSetting(found.node.store.get, definitions.lightingAutoOff)
+        : lightingAutoOff;
+      if (candidateLayout?.version !== 1 || typeof candidateLayout.slots !== 'object') continue;
+      if (!['pinned', 'recent', 'priority', 'custom'].includes(candidateAgentSource)) continue;
+      layout = candidateLayout;
+      agentSource = candidateAgentSource;
+      if (typeof candidateLightingAutoOff === 'string') lightingAutoOff = candidateLightingAutoOff;
+      break;
+    } catch {}
+  }
+  const toEpoch = (value) => {
+    if (typeof value === 'number' && Number.isFinite(value) && value > 0) return value < 100000000000 ? value * 1000 : value;
+    if (typeof value === 'string') {
+      const parsed = Date.parse(value);
+      if (Number.isFinite(parsed)) return parsed;
+    }
+    return undefined;
+  };
+  const slots = found.slots.map((slot) => ({
+    ...slot,
+    activityAt: toEpoch(slot.activityAt) ?? toEpoch(slot.updatedAt) ?? toEpoch(slot.lastActivityAt) ??
+      toEpoch(slot.thread?.updatedAt) ?? toEpoch(slot.task?.updatedAt)
+  }));
 
   const html = document.documentElement;
   const body = document.body;
@@ -125,13 +176,15 @@ export class CodexMicroRendererBridge {
   private pending = new Map<number, { resolve: (value: CdpResponse) => void; reject: (error: Error) => void; timer: NodeJS.Timeout }>();
   private connecting?: Promise<void>;
   private lastSnapshot?: MicroSnapshot;
+  private readonly sessionOwnership = new CodexSessionOwnershipIndex();
 
   constructor(private readonly log: (message: string) => void) {}
 
   async refresh(): Promise<MicroSnapshot> {
     try {
       await this.ensureConnected();
-      const snapshot = await this.evaluate<MicroSnapshot>(SNAPSHOT_EXPRESSION);
+      const nativeSnapshot = await this.evaluate<MicroSnapshot>(SNAPSHOT_EXPRESSION);
+      const snapshot = await this.sessionOwnership.annotate(nativeSnapshot);
       this.lastSnapshot = snapshot;
       return snapshot;
     } catch (error) {
@@ -140,12 +193,16 @@ export class CodexMicroRendererBridge {
     }
   }
 
-  async sendAgent(slot: number, act: 0 | 1): Promise<void> {
+  async sendAgent(slot: number, act: 0 | 1, expectedThreadKey?: string): Promise<void> {
     if (!Number.isInteger(slot) || slot < 0 || slot > 5) throw new Error(`Ungültiger Micro-Agent-Slot: ${slot}`);
     const snapshot = this.lastSnapshot ?? await this.refresh();
     const assignment = snapshot.slots.find((item) => item.id === slot);
+    const threadKey = expectedThreadKey ?? assignment?.threadKey ?? null;
+    if (expectedThreadKey && assignment?.threadKey !== expectedThreadKey) {
+      this.log(`Agent slot ${slot + 1} changed before dispatch; routing the preserved task identity.`);
+    }
     await this.dispatch("codex-micro-hid-event", {
-      event: { key: `AG0${slot}`, act, slot, threadKey: assignment?.threadKey ?? null }
+      event: { key: `AG0${slot}`, act, slot, threadKey }
     }, "codex-micro-hid-event");
   }
 
@@ -245,10 +302,18 @@ export class CodexMicroRendererBridge {
     await this.ensureConnected();
     const message = { type, ...payload };
     const expression = `(async () => {
-      const href = [...document.querySelectorAll('link[rel="modulepreload"]')].map((link) => link.href).find((value) => value.includes('/assets/vscode-api-'));
-      if (!href) throw new Error('Codex VS Code bridge module is unavailable.');
-      const vscode = await import(href);
-      const bus = [vscode.g, vscode.m, ...Object.values(vscode)].find((candidate) => candidate && typeof candidate === 'object' && candidate.handlers instanceof Map && (typeof candidate.dispatchHostMessage === 'function' || typeof candidate.dispatchMessage === 'function'));
+      const urls = [...new Set([
+        ...[...document.querySelectorAll('link[href], script[src]')].map((element) => element.href || element.src),
+        ...performance.getEntriesByType('resource').map((entry) => entry.name)
+      ])].filter((url) => url.includes('/assets/') && url.endsWith('.js'));
+      let bus = null;
+      for (const url of urls) {
+        try {
+          const namespace = await import(url);
+          bus = Object.values(namespace).find((candidate) => candidate && typeof candidate === 'object' && candidate.handlers instanceof Map && (typeof candidate.dispatchHostMessage === 'function' || typeof candidate.dispatchMessage === 'function'));
+          if (bus) break;
+        } catch {}
+      }
       if (!bus) throw new Error('Codex VS Code event bus was not found.');
       const dispatch = bus.dispatchHostMessage ?? bus.dispatchMessage;
       if ((bus.handlers.get(${JSON.stringify(requiredHandler)})?.size ?? 0) === 0) {
@@ -349,7 +414,16 @@ export class CodexMicroRendererBridge {
 async function discoverDebugPort(): Promise<number> {
   const fromFile = await readPortFile();
   if (fromFile && await isDebugPort(fromFile)) return fromFile;
-  if (process.platform !== "win32") throw new Error("Die native Codex-Micro-Brücke ist derzeit für Windows eingerichtet.");
+  if (process.platform === "darwin") {
+    const { stdout } = await execFileAsync("/bin/ps", ["-axo", "command="], { timeout: 4000 });
+    for (const line of stdout.split("\n")) {
+      if (!line.includes(".app/Contents/MacOS/") || !line.includes("--remote-debugging-address=127.0.0.1")) continue;
+      const port = Number.parseInt(line.match(/--remote-debugging-port(?:=|\s+)(\d+)/)?.[1] ?? "", 10);
+      if (Number.isInteger(port) && await isDebugPort(port)) return port;
+    }
+    throw new Error("Codex wurde nicht über den macOS-Micro-Aktivierungsstarter geöffnet.");
+  }
+  if (process.platform !== "win32") throw new Error("Die native Codex-Micro-Brücke wird auf dieser Plattform nicht unterstützt.");
 
   const command = "$ports = Get-CimInstance Win32_Process | Where-Object { $_.Name -eq 'ChatGPT.exe' -and $_.CommandLine -match '--remote-debugging-port=(\\d+)' } | ForEach-Object { if ($_.CommandLine -match '--remote-debugging-port=(\\d+)') { $Matches[1] } }; $ports | Select-Object -Unique";
   const { stdout } = await execFileAsync("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", command], { windowsHide: true, timeout: 4000 });

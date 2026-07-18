@@ -1,13 +1,15 @@
 # Troubleshooting
 
-## Codex Micro is missing from Settings
+## Codex Micro is missing from Settings on Windows
 
 - You can safely run the launcher again while a launcher-started Codex session is open; it now reuses the existing debug session instead of restarting Codex.
 - Use `Start-CodexDeck.ps1 -ForceRestart` only when you explicitly want to restart Codex.
-- To start it automatically after Windows sign-in, run `Start-CodexDeck.ps1 -InstallStartup` once. Remove that behavior with `-UninstallStartup`.
+- To keep it available across Windows sign-in, Codex restarts, and Codex app updates, run `Start-CodexDeck.ps1 -InstallStartup` once. This installs a persistent single-instance watcher. Remove it with `-UninstallStartup`.
+- Installing monitoring leaves an already-open normal Codex session untouched. Close and reopen Codex once, or run the launcher manually when you are ready for that one recovery restart.
+- Watcher diagnostics are stored in `%LOCALAPPDATA%\CodexDeck\watcher.log` and rotate automatically.
 - Close all Codex windows.
 - Start Codex with `Start Codex Deck.cmd`.
-- Keep the launcher folder intact; `runtime-override.mjs` must remain next to the PowerShell script.
+- After `-InstallStartup`, the watcher uses its durable copy under `%LOCALAPPDATA%\CodexDeck\launcher`; the extracted ZIP is no longer required.
 - Run this diagnostic from the launcher folder:
 
 ```powershell
@@ -16,10 +18,24 @@
 
 If the launcher times out after a Codex update, open an issue with the exact Codex version and launcher output.
 
+## Codex Micro is missing from Settings on macOS
+
+Run these from the extracted matching launcher:
+
+```zsh
+./start-codex-deck.sh dry-run
+./start-codex-deck.sh self-test
+tail -n 100 "$HOME/Library/Application Support/CodexDeck/watcher.log"
+```
+
+Do not replace, re-sign, or edit the Codex app bundle. If `start` says an existing normal session needs a restart, it waits for your explicit `yes`.
+
 ## Agent keys say Bridge offline
 
 - Confirm Codex was started through the launcher.
-- Confirm `%LOCALAPPDATA%\CodexDeck\codex-micro-bridge.json` exists and contains a port number.
+- Confirm the platform bridge state exists and contains a port number:
+  - Windows: `%LOCALAPPDATA%\CodexDeck\codex-micro-bridge.json`
+  - macOS: `~/Library/Application Support/CodexDeck/codex-micro-bridge.json`
 - Restart Stream Deck.
 - Do not run two launcher-started Codex instances at the same time.
 
@@ -29,11 +45,11 @@ The native handler was unavailable or the action is not valid in the current com
 
 ## Agent assignments are unexpected
 
-Codex Deck does not choose the six tasks. Open **Codex Settings > Codex Micro > Agent keys** and select pinned, recently updated, priority, or custom assignments. The Stream Deck mirrors those native slots.
+Codex Deck does not choose the six native tasks. Open **Codex Settings > Codex Micro > Agent keys** and select pinned, recently updated, priority, or custom assignments. In multi-host mode, both native six-slot lists are de-duplicated and globally ordered; mirrored tasks route to the host owning the exact local rollout filename.
 
 ## Local command icon does not appear
 
-- Verify the file is in `%LOCALAPPDATA%\CodexDeck\icons`.
+- Verify the file is in `%LOCALAPPDATA%\CodexDeck\icons` on Windows or `~/Library/Application Support/CodexDeck/icons` on macOS.
 - Verify the filename exactly matches the keycap ID reported by Codex, including `+` or `-`.
 - Verify the SVG has a numeric `viewBox`.
 - Restart Stream Deck after changing icon files.
@@ -42,13 +58,22 @@ Codex Deck does not choose the six tasks. Open **Codex Settings > Codex Micro > 
 
 Restart Stream Deck. Elgato notes that plugins can fail to appear when the Stream Deck app is still running with elevated state after an install or update.
 
+## Mac relay is offline
+
+- First confirm both local bridges work independently.
+- SSH mode: confirm the Windows watcher is installed and the SSH alias works outside Codex's remote-CLI connection.
+- Inspect `%LOCALAPPDATA%\CodexDeck\watcher.log` for the dedicated relay tunnel state.
+- Confirm the Windows relay URL is `ws://127.0.0.1:<port>` for SSH, or an explicit Tailscale address.
+- Restart only the Stream Deck plugin/app after configuration. Do not restart Codex.
+- Run `Configure-CodexDeckRelay.ps1 -Disable` to return cleanly to Windows-only mode.
+
 ## What to include in a bug report
 
-- Codex app version (`Get-AppxPackage OpenAI.Codex | Select-Object Version`).
+- Codex app version and platform (`Get-AppxPackage OpenAI.Codex | Select-Object Version` on Windows; bundle version on macOS).
 - Stream Deck version and device model.
 - Windows version.
 - Whether `Start-CodexDeck.ps1 -DryRun` succeeds.
 - The relevant Stream Deck plugin log excerpt.
 - The exact action that failed.
 
-Do not attach Codex databases, rollout files, authentication data, or the official SVG asset files.
+Do not attach Codex databases, rollout files, relay JSON, authentication data, personal paths, or official SVG asset files.

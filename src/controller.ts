@@ -1,13 +1,17 @@
 import streamDeck, { type KeyAction } from "@elgato/streamdeck";
 import { readFile } from "node:fs/promises";
-import { homedir } from "node:os";
 import { join } from "node:path";
+import { codexDeckStateRoot } from "./codex-deck-paths.js";
+import { isRemoteControlRequest, readControlTarget, writeControlTarget, type HostPlatform as ControlTarget } from "./control-target.js";
+import { CodexRelayClient, readRelayClientConfig } from "./codex-relay-client.js";
 import { CodexMicroRendererBridge } from "./codex-micro-renderer-bridge.js";
+import { getOrCreateHostIdentity } from "./host-identity.js";
 import type { OfficialKeycapId } from "./keycaps.js";
+import { HostActivityIndex, type HostSnapshot, type RelayCommand } from "./relay-protocol.js";
 import { renderAgentKey, renderBuiltinKeycap, renderFallbackKeycap, renderImportedKeycap, type BuiltinIconName } from "./render.js";
-import { openCodexThread } from "./windows-open.js";
+import { openCodexThread } from "./codex-open.js";
 import { visualStatusFromMicro } from "./status.js";
-import type { MicroActionSlot, MicroDirection, MicroSnapshot, ReasoningAdjustment } from "./types.js";
+import type { CodexHost, MicroActionSlot, MicroDirection, MicroSnapshot, ReasoningAdjustment, RoutedAgentSlot } from "./types.js";
 
 export type FixedIconSource =
   | { kind: "local"; keycapId: string }
@@ -18,11 +22,7 @@ type AgentRegistration = { action: KeyAction; slot: number };
 type MicroActionRegistration = { action: KeyAction; slot: MicroActionSlot };
 type ActionIdentity = { id: string };
 
-const USER_ICON_ROOT = join(
-  process.env.LOCALAPPDATA ?? join(homedir(), "AppData", "Local"),
-  "CodexDeck",
-  "icons"
-);
+const USER_ICON_ROOT = join(codexDeckStateRoot(), "icons");
 
 export class DeckController {
   private readonly microBridge = new CodexMicroRendererBridge((message) => streamDeck.logger.info(message));
@@ -31,11 +31,20 @@ export class DeckController {
   private readonly fixedActions = new Map<string, FixedIconRegistration>();
   private readonly keycapImages = new Map<string, Promise<string | null>>();
   private readonly lastImages = new Map<string, string>();
+  private readonly hostToggleActions = new Map<string, KeyAction>();
+  private readonly activityIndex = new HostActivityIndex();
+  private readonly pressedAgents = new Map<number, RoutedAgentSlot>();
+  private readonly pressedControlTargets = new Map<string, string>();
+  private relayClient?: CodexRelayClient;
+  private localHost?: CodexHost;
+  private localSnapshot?: HostSnapshot;
+  private routedSlots: RoutedAgentSlot[] = [];
+  private targetHostId?: string;
+  private targetPlatform: ControlTarget = "win32";
   private poll?: NodeJS.Timeout;
   private animation?: NodeJS.Timeout;
   private stopped = false;
   private animationFrame = 0;
-  private snapshot?: MicroSnapshot;
   private lastError = "";
   private lastAssignmentSignature = "";
   private lastStatusSignature = "";
@@ -43,6 +52,18 @@ export class DeckController {
 
   async start(): Promise<void> {
     this.stopped = false;
+    this.localHost = await getOrCreateHostIdentity();
+    this.targetPlatform = await readControlTarget(undefined, this.localHost.platform);
+    if (this.targetPlatform === this.localHost.platform) this.targetHostId = this.localHost.hostId;
+    const relayConfig = await readRelayClientConfig();
+    if (relayConfig) {
+      this.relayClient = new CodexRelayClient(
+        relayConfig,
+        () => {},
+        (message) => streamDeck.logger.info(message)
+      );
+      this.relayClient.start();
+    }
     await this.refresh();
     this.scheduleRefresh();
     this.scheduleAnimation();
@@ -52,6 +73,7 @@ export class DeckController {
     this.stopped = true;
     if (this.poll) clearInterval(this.poll);
     if (this.animation) clearInterval(this.animation);
+    this.relayClient?.close();
     this.microBridge.close();
   }
 
@@ -82,90 +104,136 @@ export class DeckController {
     this.unregister(action, this.fixedActions);
   }
 
+  registerHostToggle(action: KeyAction): void {
+    this.hostToggleActions.set(action.id, action);
+    void this.renderHostToggle(action);
+  }
+
+  unregisterHostToggle(action: ActionIdentity): void {
+    this.hostToggleActions.delete(action.id);
+    this.lastImages.delete(action.id);
+  }
+
+  async toggleTargetHost(): Promise<void> {
+    const remote = this.relayClient?.currentHost();
+    if (!this.localHost) throw new Error("The local Codex host is not ready.");
+    if (this.targetPlatform === this.localHost.platform) {
+      if (!remote) throw new Error("No remote Codex host is connected.");
+      this.targetPlatform = remote.platform;
+      this.targetHostId = remote.hostId;
+    } else {
+      this.targetPlatform = this.localHost.platform;
+      this.targetHostId = this.localHost.hostId;
+    }
+    await writeControlTarget(this.targetPlatform);
+    await this.renderAll();
+  }
+
   async sendAgent(slot: number, act: 0 | 1): Promise<void> {
-    await this.microBridge.sendAgent(slot, act);
+    const assignment = act === 0 ? this.pressedAgents.get(slot) : this.routedSlots[slot];
+    if (!assignment) throw new Error(`No Codex task is assigned to global agent slot ${slot + 1}.`);
+    if (act === 1) this.pressedAgents.set(slot, assignment);
+    else this.pressedAgents.delete(slot);
+    if (!assignment.threadKey) throw new Error("The selected Codex task has no stable thread identity.");
+    if (assignment.host.hostId === this.localHost?.hostId) await this.microBridge.sendAgent(assignment.sourceSlot, act, assignment.threadKey);
+    else await this.sendRemote({ kind: "agent", slot: assignment.sourceSlot, threadKey: assignment.threadKey, act });
   }
 
   async sendMicroAction(slot: MicroActionSlot, act: 0 | 1): Promise<void> {
-    await this.microBridge.sendAction(slot, act);
+    const target = this.pressTarget(`action:${slot}`, act);
+    await this.sendToHost(target, { kind: "action", slot, act }, () => this.microBridge.sendAction(slot, act));
   }
 
   async sendJoystick(direction: MicroDirection, distance: 0 | 1): Promise<void> {
-    await this.microBridge.sendJoystick(direction, distance);
+    const target = this.pressTarget(`joystick:${direction}`, distance);
+    await this.sendToHost(target, { kind: "joystick", direction, distance }, () => this.microBridge.sendJoystick(direction, distance));
   }
 
   async sendEncoder(act: 0 | 1): Promise<void> {
-    await this.microBridge.sendEncoder(act);
+    const target = this.pressTarget("encoder", act);
+    await this.sendToHost(target, { kind: "encoder", act }, () => this.microBridge.sendEncoder(act));
   }
 
   async adjustReasoning(direction: ReasoningAdjustment): Promise<void> {
-    await this.microBridge.adjustReasoning(direction);
+    await this.sendToTarget({ kind: "reasoning", direction }, () => this.microBridge.adjustReasoning(direction));
   }
 
   async runKeycap(keycapId: OfficialKeycapId): Promise<void> {
-    await this.microBridge.runKeycap(keycapId);
+    await this.sendToTarget({ kind: "keycap", keycapId }, () => this.microBridge.runKeycap(keycapId));
   }
 
   async createTask(): Promise<void> {
-    await openCodexThread("new");
+    if (this.isRemoteTarget()) await this.sendRemote({ kind: "keycap", keycapId: "NEW" });
+    else await openCodexThread("new");
   }
 
   private async refresh(): Promise<void> {
     try {
       const snapshot = await this.microBridge.refresh();
-      this.snapshot = snapshot;
+      if (!this.localHost) this.localHost = await getOrCreateHostIdentity();
+      this.localSnapshot = { host: this.localHost, snapshot, observedAt: Date.now() };
       this.lastError = "";
-
-      const assignments = snapshot.slots.map((slot) => `${slot.id}=${slot.threadKey ?? "empty"}`).join(" ");
-      if (assignments !== this.lastAssignmentSignature) {
-        this.lastAssignmentSignature = assignments;
-        streamDeck.logger.info(`Codex Micro slots: ${assignments}`);
-      }
-
-      const statuses = snapshot.slots.map((slot) => `${slot.id}:${slot.status}:${slot.selected}`).join(",");
-      if (statuses !== this.lastStatusSignature) {
-        this.lastStatusSignature = statuses;
-        streamDeck.logger.info(`Codex Micro states: ${snapshot.slots.map((slot) => `${slot.id + 1}=${slot.status}`).join(" ")}`);
-      }
-
-      const layout = JSON.stringify({ theme: snapshot.theme, slots: snapshot.layout.slots });
-      if (layout !== this.lastLayoutSignature) {
-        this.lastLayoutSignature = layout;
-        this.keycapImages.clear();
-        streamDeck.logger.info(`Codex Micro layout synchronized (${snapshot.agentSource}, ${snapshot.theme} theme).`);
-      }
-
-      await this.renderAll();
     } catch (error) {
-      this.snapshot = undefined;
+      this.localSnapshot = undefined;
       const message = String(error);
       if (message !== this.lastError) {
         this.lastError = message;
         streamDeck.logger.warn(`Codex Micro bridge unavailable: ${message}`);
       }
-      await Promise.all([...this.agents.values()].map((registration) => this.renderAgent(registration)));
     }
+    await this.refreshDisplay();
+  }
+
+  private async refreshDisplay(): Promise<void> {
+    const remoteSnapshot = this.relayClient?.currentSnapshot();
+    if (this.localHost && this.targetPlatform !== this.localHost.platform && remoteSnapshot) this.targetHostId = remoteSnapshot.host.hostId;
+    else if (this.localHost && this.targetPlatform === this.localHost.platform) this.targetHostId = this.localHost.hostId;
+    const inputs = [this.localSnapshot, remoteSnapshot].filter((value): value is HostSnapshot => value != null);
+    this.routedSlots = this.activityIndex.merge(inputs);
+
+    const assignments = this.routedSlots.map((slot) => `${slot.id}=${slot.host.platform}:${slot.threadKey ?? "empty"}`).join(" ");
+    if (assignments !== this.lastAssignmentSignature) {
+      this.lastAssignmentSignature = assignments;
+      streamDeck.logger.info(`Codex multi-host slots: ${assignments || "empty"}`);
+    }
+
+    const statuses = this.routedSlots.map((slot) => `${slot.host.hostId}:${slot.threadKey}:${slot.status}:${slot.selected}`).join(",");
+    if (statuses !== this.lastStatusSignature) {
+      this.lastStatusSignature = statuses;
+      streamDeck.logger.info(`Codex multi-host states: ${this.routedSlots.map((slot) => `${slot.id + 1}=${slot.status}`).join(" ") || "empty"}`);
+    }
+
+    const target = this.targetSnapshot();
+    const layout = JSON.stringify({ target: this.targetHostId, theme: target?.theme, slots: target?.layout.slots });
+    if (layout !== this.lastLayoutSignature) {
+      this.lastLayoutSignature = layout;
+      this.keycapImages.clear();
+      if (target) streamDeck.logger.info(`Codex Micro layout synchronized (${target.agentSource}, ${target.theme} theme).`);
+    }
+    await this.renderAll();
   }
 
   private async renderAll(): Promise<void> {
     await Promise.all([
       ...[...this.agents.values()].map((registration) => this.renderAgent(registration)),
       ...[...this.microActions.values()].map((registration) => this.renderMicroAction(registration)),
-      ...[...this.fixedActions.values()].map((registration) => this.renderFixedAction(registration))
+      ...[...this.fixedActions.values()].map((registration) => this.renderFixedAction(registration)),
+      ...[...this.hostToggleActions.values()].map((action) => this.renderHostToggle(action))
     ]);
   }
 
   private async renderAgent({ action, slot }: AgentRegistration): Promise<void> {
-    const agent = this.snapshot?.slots.find((item) => item.id === slot);
-    const title = agent?.title ?? (this.snapshot ? "Not assigned" : "Bridge offline");
+    const agent = this.routedSlots[slot];
+    const title = agent?.title ?? (this.localSnapshot || this.relayClient?.currentSnapshot() ? "Not assigned" : "Bridge offline");
     const status = agent ? visualStatusFromMicro(agent.status) : "empty";
-    const theme = this.snapshot?.theme ?? "dark";
-    await this.setImage(action, renderAgentKey(slot, title, status, agent?.selected ?? false, this.animationFrame, theme));
+    const theme = this.targetSnapshot()?.theme ?? this.localSnapshot?.snapshot.theme ?? "dark";
+    const hostBadge = agent && this.relayClient ? (agent.host.platform === "darwin" ? "M" : "W") : undefined;
+    await this.setImage(action, renderAgentKey(slot, title, status, agent?.selected ?? false, this.animationFrame, theme, hostBadge));
   }
 
   private async renderAnimatedAgents(): Promise<void> {
     const registrations = [...this.agents.values()].filter(({ slot }) => {
-      const agent = this.snapshot?.slots.find((item) => item.id === slot);
+      const agent = this.routedSlots[slot];
       if (!agent) return false;
       const status = visualStatusFromMicro(agent.status);
       return status === "thinking" || status === "input";
@@ -176,18 +244,62 @@ export class DeckController {
   }
 
   private async renderMicroAction({ action, slot }: MicroActionRegistration): Promise<void> {
-    const keycapId = this.snapshot?.layout.slots[slot]?.keycapId;
+    const snapshot = this.targetSnapshot();
+    const keycapId = snapshot?.layout.slots[slot]?.keycapId;
     if (!keycapId) return;
-    const image = await this.keycapImage(keycapId, this.snapshot?.theme ?? "dark");
+    const image = await this.keycapImage(keycapId, snapshot?.theme ?? "dark");
     if (image) await this.setImage(action, image);
   }
 
   private async renderFixedAction(registration: FixedIconRegistration): Promise<void> {
-    const theme = this.snapshot?.theme ?? "dark";
+    const theme = this.targetSnapshot()?.theme ?? "dark";
     const image = registration.source.kind === "builtin"
       ? renderBuiltinKeycap(registration.source.name, theme)
       : await this.keycapImage(registration.source.keycapId, theme);
     if (image) await this.setImage(registration.action, image);
+  }
+
+  private async renderHostToggle(action: KeyAction): Promise<void> {
+    const label = this.targetPlatform === "darwin" ? "MAC" : "WIN";
+    const theme = this.targetSnapshot()?.theme ?? "dark";
+    await this.setImage(action, renderFallbackKeycap(label, theme));
+  }
+
+  private targetSnapshot(): MicroSnapshot | undefined {
+    const remote = this.relayClient?.currentSnapshot();
+    if (this.localHost && this.targetPlatform !== this.localHost.platform) return remote?.snapshot;
+    return this.localSnapshot?.snapshot;
+  }
+
+  private isRemoteTarget(): boolean {
+    return this.localHost != null && this.targetPlatform !== this.localHost.platform;
+  }
+
+  private async sendRemote(command: RelayCommand): Promise<void> {
+    if (!this.relayClient) throw new Error("Remote Codex relay is not configured.");
+    await this.relayClient.send(command);
+  }
+
+  private async sendToTarget(command: RelayCommand, local: () => Promise<void>): Promise<void> {
+    await this.sendToHost(this.targetHostId, command, local);
+  }
+
+  private async sendToHost(hostId: string | undefined, command: RelayCommand, local: () => Promise<void>): Promise<void> {
+    const localHostId = this.localHost?.hostId;
+    const remoteRequested = isRemoteControlRequest(this.targetPlatform, this.localHost?.platform ?? "win32", hostId, localHostId);
+    if (remoteRequested) await this.sendRemote(command);
+    else await local();
+  }
+
+  private pressTarget(key: string, pressed: 0 | 1): string | undefined {
+    if (pressed === 1) {
+      const target = this.targetHostId;
+      if (target) this.pressedControlTargets.set(key, target);
+      return target;
+    }
+    const target = this.pressedControlTargets.get(key) ?? this.targetHostId;
+    this.pressedControlTargets.delete(key);
+    return target;
   }
 
   private async setImage(action: KeyAction, image: string): Promise<void> {

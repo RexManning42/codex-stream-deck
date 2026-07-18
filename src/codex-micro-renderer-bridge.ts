@@ -125,25 +125,55 @@ const SNAPSHOT_EXPRESSION = `(async () => {
   let layout = definitions.layout.default;
   let agentSource = definitions.agentSource.default;
   let lightingAutoOff = definitions.lightingAutoOff?.default ?? '3-minutes';
-  const settingReaders = exportedValues.filter((candidate) => {
-    if (typeof candidate !== 'function' || candidate.length !== 2) return false;
+
+  let settingsResolved = false;
+  const directSettingReader = exportedValues.find((candidate) => {
+    if (typeof candidate !== 'function' || candidate.length !== 1) return false;
     const source = Function.prototype.toString.call(candidate);
-    return source.includes('.key') && source.includes('.default');
+    return source.includes('get-setting') && source.includes('.default');
   });
-  for (const readSetting of settingReaders) {
+  if (directSettingReader) {
     try {
-      const candidateLayout = await readSetting(found.node.store.get, definitions.layout);
-      const candidateAgentSource = await readSetting(found.node.store.get, definitions.agentSource);
+      const candidateLayout = await directSettingReader(definitions.layout);
+      const candidateAgentSource = await directSettingReader(definitions.agentSource);
       const candidateLightingAutoOff = definitions.lightingAutoOff
-        ? await readSetting(found.node.store.get, definitions.lightingAutoOff)
+        ? await directSettingReader(definitions.lightingAutoOff)
         : lightingAutoOff;
-      if (candidateLayout?.version !== 1 || typeof candidateLayout.slots !== 'object') continue;
-      if (!['pinned', 'recent', 'priority', 'custom'].includes(candidateAgentSource)) continue;
-      layout = candidateLayout;
-      agentSource = candidateAgentSource;
-      if (typeof candidateLightingAutoOff === 'string') lightingAutoOff = candidateLightingAutoOff;
-      break;
+      if (
+        candidateLayout?.version === 1 &&
+        typeof candidateLayout.slots === 'object' &&
+        ['pinned', 'recent', 'priority', 'custom'].includes(candidateAgentSource)
+      ) {
+        layout = candidateLayout;
+        agentSource = candidateAgentSource;
+        if (typeof candidateLightingAutoOff === 'string') lightingAutoOff = candidateLightingAutoOff;
+        settingsResolved = true;
+      }
     } catch {}
+  }
+
+  if (!settingsResolved) {
+    const settingReaders = exportedValues.filter((candidate) => {
+      if (typeof candidate !== 'function' || candidate.length !== 2) return false;
+      const source = Function.prototype.toString.call(candidate);
+      return source.includes('.key') && source.includes('.default');
+    });
+    const getStoreValue = found.node.store.get.bind(found.node.store);
+    for (const readSetting of settingReaders) {
+      try {
+        const candidateLayout = await readSetting(getStoreValue, definitions.layout);
+        const candidateAgentSource = await readSetting(getStoreValue, definitions.agentSource);
+        const candidateLightingAutoOff = definitions.lightingAutoOff
+          ? await readSetting(getStoreValue, definitions.lightingAutoOff)
+          : lightingAutoOff;
+        if (candidateLayout?.version !== 1 || typeof candidateLayout.slots !== 'object') continue;
+        if (!['pinned', 'recent', 'priority', 'custom'].includes(candidateAgentSource)) continue;
+        layout = candidateLayout;
+        agentSource = candidateAgentSource;
+        if (typeof candidateLightingAutoOff === 'string') lightingAutoOff = candidateLightingAutoOff;
+        break;
+      } catch {}
+    }
   }
   const toEpoch = (value) => {
     if (typeof value === 'number' && Number.isFinite(value) && value > 0) return value < 100000000000 ? value * 1000 : value;

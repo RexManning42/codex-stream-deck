@@ -15,6 +15,7 @@ const snapshot = await new Promise<HostSnapshot>((resolve, reject) => {
 });
 
 console.log(`Relay snapshot: ${snapshot.host.hostName} (${snapshot.host.platform}, ${snapshot.host.hostId})`);
+console.log(`Agent source: ${snapshot.snapshot.agentSource}`);
 for (const slot of snapshot.snapshot.slots) {
   console.log(`${slot.id + 1}: ${slot.status}${slot.selected ? " selected" : ""} | local-rollout=${slot.ownedByHost === true ? "yes" : "no"} | activity=${slot.activityAt ?? "unknown"} | ${slot.threadKey ?? "empty"} | ${slot.title ?? ""}`);
 }

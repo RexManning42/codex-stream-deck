@@ -32,6 +32,9 @@ test("renderer bridge uses native Micro events and discovers hashed modules at r
   assert.match(source, /createSubscriberAtom/);
   assert.match(source, /slots\.length === 6/);
   assert.match(source, /codex-micro-agent-source/);
+  assert.match(source, /directSettingReader/);
+  assert.match(source, /get-setting/);
+  assert.match(source, /found\.node\.store\.get\.bind\(found\.node\.store\)/);
   assert.doesNotMatch(source, /candidate\?\.token === appScope/);
   assert.doesNotMatch(source, /D90_rd6W|SFcKxWqG|DJFcGyy5/);
 });

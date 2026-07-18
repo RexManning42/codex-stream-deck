@@ -1,14 +1,16 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
-import { REASONING_COMMANDS, selectCodexMainTarget } from "../src/codex-micro-renderer-bridge.js";
+import { REASONING_COMMANDS, retainEvaluationPromise, selectCodexMainTarget } from "../src/codex-micro-renderer-bridge.js";
 import { ADDITIONAL_KEYCAPS, OFFICIAL_KEYCAP_IDS } from "../src/keycaps.js";
 import { visualStatusFromMicro } from "../src/status.js";
 
 test("official Micro statuses map to the Stream Deck color states", () => {
   assert.equal(visualStatusFromMicro("off"), "empty");
   assert.equal(visualStatusFromMicro("working"), "thinking");
+  assert.equal(visualStatusFromMicro("thinking"), "thinking");
   assert.equal(visualStatusFromMicro("unread"), "complete");
+  assert.equal(visualStatusFromMicro("done"), "complete");
   assert.equal(visualStatusFromMicro("approval"), "input");
   assert.equal(visualStatusFromMicro("awaiting-approval"), "input");
   assert.equal(visualStatusFromMicro("awaiting-response"), "input");
@@ -56,6 +58,16 @@ test("renderer bridge rejects auxiliary-only renderer lists", () => {
   ]);
 
   assert.equal(target, undefined);
+});
+
+test("renderer evaluations retain their awaited promise until CDP has collected the result", () => {
+  const expression = retainEvaluationPromise("(async () => true)()", 17);
+  assert.match(expression, /__codexDeckPendingEvaluations/);
+  assert.match(expression, /codex-deck-17/);
+  assert.match(expression, /Promise\.resolve/);
+  assert.match(expression, /setTimeout\(\(\) => store\.delete/);
+  const namespaced = retainEvaluationPromise("Promise.resolve(true)", "bridge-a-1");
+  assert.match(namespaced, /codex-deck-bridge-a-1/);
 });
 
 test("reasoning controls use the official native composer commands", async () => {

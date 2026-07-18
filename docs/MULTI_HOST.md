@@ -7,7 +7,7 @@ Stream Deck -> Windows plugin -> local Windows Codex
                            \-> authenticated relay -> local Mac Codex
 ```
 
-The relay never exposes Chrome DevTools. It forwards only typed Codex Deck commands and six native agent snapshots.
+The relay never exposes Chrome DevTools. It forwards only typed Codex Deck commands, six native agent snapshots, and a bounded content-free local task-presence catalog.
 
 ## Before pairing
 
@@ -70,18 +70,20 @@ Enter the token in the hidden prompt. The relay accepts loopback, Tailscale IPv4
 
 Single-host Windows and macOS setups preserve Codex's six native slots exactly. In multi-host mode, the Codex app on the computer running the Stream Deck plugin is the controller for the combined list:
 
-- **Pinned:** preserves the controller's six pinned slots and their order, then routes each task to its owning desktop.
+- **Pinned:** interleaves the pinned order from Windows and Mac slot by slot, removes duplicates, and routes each task to its owning desktop. With six unique tasks available this gives both hosts up to three keys instead of allowing one full list to hide the other.
 - **Recently updated:** globally orders actual Windows and Mac activity.
 - **Priority:** ranks approval/questions first, then unread/errors, active work, and idle tasks.
-- **Individual assignments:** preserves the controller's slot positions. A controller assignment wins; when that slot is empty and the remote Codex app is also set to Individual assignments, the assignment from the same remote slot is used.
+- **Individual assignments:** preserves the controller's slot positions. If both apps assign different tasks to one physical button, the controller assignment wins. When the controller slot is empty and the remote Codex app is also set to Individual assignments, its assignment from the same slot is used. The same task assigned through both apps is shown only once and routed to its rollout owner.
+
+For a true combined Pinned or Individual list, select that mode in both Codex apps. If the modes differ, the controller mode still determines the list, but only a remote host using the matching mode can contribute its own pinned order or individual assignments. Codex Deck writes a warning to the plugin log when this happens.
 
 This makes manual mixed layouts possible without another settings application. Assign a synced task directly in the controller Codex app when it is available there. For a Mac-only task that is not selectable on Windows, leave that Windows slot empty and assign the task to the same slot in the Mac Codex Micro settings. Changes are picked up automatically by the next native snapshot.
 
 ### Ownership and SSH mirrors
 
-Codex's built-in remote-SSH feature can mirror a Mac-backed task into the Windows renderer. Codex Deck does not confuse that CLI connection with the Mac desktop app. In multi-host mode it compares exact local rollout **filenames** on both hosts to find the owning desktop; it never reads rollout contents, prompts, responses, or project names.
+Codex's built-in remote-SSH feature can mirror a task into the other renderer. Codex Deck does not confuse that CLI connection with the owning desktop. In multi-host mode it compares exact local rollout **filenames** on both hosts and checks only bounded tail text for structural `agent_reasoning`, `function_call`, `turn_context`, and `task_complete` event tags. Prompt text, responses, project names, and other rollout content are neither parsed nor sent through the relay.
 
-For the same cloud task visible on both hosts, live status and selection are merged while commands route to the rollout owner. Ownership is host-generic and contains no hard-coded task IDs or project names.
+The relay catalog contains only recent task UUIDs, modification times, and derived `working`, `complete`, or `idle` state. For the same cloud task visible on both hosts, live status and selection are merged while commands route to the rollout owner—even when Codex temporarily omits the task from that owner's six native Micro slots. Ownership is host-generic and contains no hard-coded task IDs or project names.
 
 ### Ordering boundary
 

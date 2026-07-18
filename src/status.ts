@@ -3,8 +3,14 @@ import type { AgentVisualStatus } from "./types.js";
 export function visualStatusFromMicro(status: string): AgentVisualStatus {
   switch (status) {
     case "off": return "empty";
-    case "working": return "thinking";
-    case "unread": return "complete";
+    case "working":
+    case "thinking":
+      return "thinking";
+    case "unread":
+    case "complete":
+    case "completed":
+    case "done":
+      return "complete";
     case "approval":
     case "awaiting-approval":
     case "awaiting-response":

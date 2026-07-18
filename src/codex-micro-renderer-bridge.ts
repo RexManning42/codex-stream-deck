@@ -1,4 +1,5 @@
 import { execFile } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { promisify } from "node:util";
@@ -224,6 +225,7 @@ export class CodexMicroRendererBridge {
   private connecting?: Promise<void>;
   private lastSnapshot?: MicroSnapshot;
   private readonly sessionOwnership = new CodexSessionOwnershipIndex();
+  private readonly evaluationNamespace = randomUUID();
 
   constructor(private readonly log: (message: string) => void) {}
 
@@ -251,6 +253,7 @@ export class CodexMicroRendererBridge {
     await this.dispatch("codex-micro-hid-event", {
       event: { key: `AG0${slot}`, act, slot, threadKey }
     }, "codex-micro-hid-event");
+    if (act === 1 && threadKey) this.sessionOwnership.markOpened(threadKey);
   }
 
   async sendAction(slot: MicroActionSlot, act: 0 | 1): Promise<void> {
@@ -413,6 +416,10 @@ export class CodexMicroRendererBridge {
     const socket = this.socket;
     if (!socket || socket.readyState !== WebSocket.OPEN) return Promise.reject(new Error("Codex-Micro-Brücke ist nicht verbunden."));
     const id = ++this.nextId;
+    // CDP may garbage-collect an awaited Runtime.evaluate promise while a
+    // renderer handler or dynamic import is still pending. Keep the exact
+    // promise reachable from the renderer until after our own timeout.
+    const retainedExpression = retainEvaluationPromise(expression, `${this.evaluationNamespace}-${id}`);
     return new Promise<T>((resolve, reject) => {
       const timer = setTimeout(() => {
         this.pending.delete(id);
@@ -428,7 +435,7 @@ export class CodexMicroRendererBridge {
           resolve(result?.result?.value as T);
         }
       });
-      socket.send(JSON.stringify({ id, method: "Runtime.evaluate", params: { expression, awaitPromise: true, returnByValue: true } }));
+      socket.send(JSON.stringify({ id, method: "Runtime.evaluate", params: { expression: retainedExpression, awaitPromise: true, returnByValue: true } }));
     });
   }
 
@@ -455,6 +462,17 @@ export class CodexMicroRendererBridge {
     }
     this.pending.clear();
   }
+}
+
+export function retainEvaluationPromise(expression: string, id: string | number): string {
+  const key = `codex-deck-${id}`;
+  return `(() => {
+    const store = globalThis.__codexDeckPendingEvaluations ??= new Map();
+    const pending = Promise.resolve((${expression}));
+    store.set(${JSON.stringify(key)}, pending);
+    setTimeout(() => store.delete(${JSON.stringify(key)}), 10000);
+    return pending;
+  })()`;
 }
 
 async function discoverDebugPort(): Promise<number> {

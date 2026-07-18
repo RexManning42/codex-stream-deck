@@ -45,7 +45,7 @@ The native handler was unavailable or the action is not valid in the current com
 
 ## Agent assignments are unexpected
 
-Codex Deck does not choose the six native tasks. Open **Codex Settings > Codex Micro > Agent keys** and select pinned, recently updated, priority, or custom assignments. In multi-host mode, both native six-slot lists are de-duplicated and globally ordered; mirrored tasks route to the host owning the exact local rollout filename.
+Codex Deck does not choose the six native tasks. Open **Codex Settings > Codex Micro > Agent keys** and select pinned, recently updated, priority, or custom assignments. For combined Pinned or Individual assignments, select the same mode in both Codex apps. Pinned tasks are interleaved between hosts; in Individual mode the Stream Deck computer wins a conflicting slot and the remote host fills empty slots. Both lists are de-duplicated, and mirrored tasks route to the host owning the exact local rollout filename.
 
 ## Local command icon does not appear
 

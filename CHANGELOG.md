@@ -1,10 +1,20 @@
 # Changelog
 
-## 0.6.1 - Unreleased
+## 0.6.1 - 2026-07-18
 
 - Fixed macOS Codex updates exposing avatar-overlay renderer targets before the real main window, which could stop relay snapshots and leave an agent key stuck in `working`.
-- Fixed remote agent commands for `client-new-thread:` task identities being rejected by the relay validator.
+- Fixed remote agent commands for nested `local:client-new-thread:` task identities being rejected by the relay validator.
+- Read the live agent-source setting directly from Codex instead of falling back to Recently updated after app updates.
 - Added mode-aware combined agent slots for pinned, recent, priority, and individual Codex Micro assignments while preserving native single-host behavior.
+- Interleaved pinned Windows and Mac tasks fairly, de-duplicated mirrored task identities, and routed each key to its real owner.
+- Defined individual-assignment conflicts: the Stream Deck computer wins a doubly assigned slot, while the other host fills empty slots; duplicate tasks appear only once.
+- Normalized additional native `thinking`, `complete`, `completed`, and `done` status names for stable animations and colors.
+- Added diagnostics when the two Codex apps use different agent-source modes.
+- Fixed explicit release-audit paths and added regression coverage for private runtime-state rejection.
+- Kept CDP evaluation promises alive in the renderer to prevent intermittent `Promise was collected` failures on remote agent presses.
+- Added a content-free local session-presence catalog so cloud/SSH mirrors are attributed to the computer that owns the rollout even when Codex omits that task from the owner's six native Micro slots.
+- Keeps freshly completed owner sessions visible at unread/error priority instead of dropping them behind idle tasks.
+- Bounds and validates relay presence catalogs and clears a derived completion state after that task is opened from the deck.
 
 ## 0.6.0 - 2026-07-18
 

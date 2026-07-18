@@ -2,7 +2,7 @@ import { readFile, readdir, stat } from "node:fs/promises";
 import { basename, extname, resolve } from "node:path";
 
 const roots = process.argv.slice(2).length
-  ? process.argv.slice(2).map(resolve)
+  ? process.argv.slice(2).map((path) => resolve(path))
   : [resolve("dist/com.simeo.codex-deck.sdPlugin"), resolve("release/codex-deck-launcher"), resolve("release/codex-deck-launcher-macos")];
 
 const forbiddenFiles = new Set([

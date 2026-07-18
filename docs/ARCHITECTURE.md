@@ -62,10 +62,11 @@ and routes agent presses by stable `(hostId, threadKey)` identity. Other control
 target the host selected by the Windows/Mac toggle.
 
 Host ownership is resolved from exact local rollout filenames, not from a
-renderer's mirrored recent list. This distinguishes a Mac desktop task mirrored
-through Windows remote SSH from a genuinely Windows-owned task. File contents,
-prompts, responses, and project names are never read. The relay never reads or
-proxies the remote CLI app-server stream.
+renderer's mirrored recent list. This distinguishes a task's owning desktop
+from a stale cloud or remote-SSH mirror. A bounded rollout tail is searched only
+for structural activity/completion event tags; prompts, responses, project
+names, and other content are neither parsed nor relayed. The relay never reads
+or proxies the remote CLI app-server stream.
 
 The relay protocol has no arbitrary-evaluation, filesystem, shell, or raw-CDP
 operation. Payloads are capped at 64 KiB, authentication is required before a
@@ -108,8 +109,9 @@ In single-host mode Codex Deck has no server, API key, analytics endpoint, or
 update service. Runtime data stays between Stream Deck, the local plugin
 process, and the local Codex renderer. Optional multi-host mode adds one
 user-configured Mac listener reachable through SSH or inside the encrypted
-tailnet; titles, task IDs, states, ownership metadata, and typed commands pass
-between the paired machines and nowhere else.
+tailnet; titles, task IDs, states, a bounded catalog of recent local task UUIDs
+and modification times, ownership metadata, and typed commands pass between the
+paired machines and nowhere else.
 
 ## Compatibility boundary
 

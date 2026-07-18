@@ -52,6 +52,8 @@ Other Stream Deck models may work, but the included layout and physical-device t
 4. In **Codex Settings > Codex Micro**, choose the agent source, action assignments, joystick actions, and encoder behavior.
 5. Build the two Stream Deck pages below.
 
+In Windows + Mac mode, choose the same agent-source mode in both Codex apps when you want both native Pinned lists or both sets of Individual assignments to contribute. Pinned tasks are interleaved fairly. For Individual assignments, the Stream Deck computer wins when both apps assign different tasks to one button, while the other computer fills empty slots. Mirrored copies of the same task are shown only once. See [Multi-host behavior](docs/MULTI_HOST.md#agent-source-modes).
+
 ## Recommended 15-key layout
 
 This is the actual polished two-page layout used for the MK.2. It keeps the six live agents on the main page and puts lower-frequency navigation/reasoning controls on page 2.

@@ -1,6 +1,17 @@
 param([string]$MacArchivePath)
 
 $ErrorActionPreference = 'Stop'
+
+function Get-Sha256Hex([string]$Path) {
+  $stream = [IO.File]::OpenRead($Path)
+  try {
+    $sha = [Security.Cryptography.SHA256]::Create()
+    try { $hash = $sha.ComputeHash($stream) }
+    finally { $sha.Dispose() }
+  } finally { $stream.Dispose() }
+  return ([BitConverter]::ToString($hash)).Replace('-', '').ToLowerInvariant()
+}
+
 $root = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
 $package = Get-Content -LiteralPath (Join-Path $root 'package.json') -Raw | ConvertFrom-Json
 $version = [string]$package.version
@@ -30,7 +41,7 @@ try {
     Write-Warning 'macOS ZIP omitted. Create it with scripts/package-macos-release.sh on macOS so executable bits are preserved, then rerun with -MacArchivePath.'
   }
   $artifacts = Get-ChildItem -LiteralPath $output -File | Sort-Object Name
-  $checksums = @($artifacts | ForEach-Object { "{0}  {1}" -f (Get-FileHash -Algorithm SHA256 -LiteralPath $_.FullName).Hash.ToLowerInvariant(), $_.Name })
+  $checksums = @($artifacts | ForEach-Object { "{0}  {1}" -f (Get-Sha256Hex $_.FullName), $_.Name })
   [IO.File]::WriteAllLines((Join-Path $output 'SHA256SUMS.txt'), $checksums, [Text.UTF8Encoding]::new($false))
   Write-Host "Release candidate prepared at: $output"
 } finally {

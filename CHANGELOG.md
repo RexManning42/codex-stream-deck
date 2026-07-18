@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.6.2 - 2026-07-18
 
 - Added explicit per-host `READY`, `DEGRADED`, `CONNECT`, and `OFFLINE` state to the Windows/Mac target key.
 - Native-signal failures now emit a typed relay health event instead of leaving an authenticated connection looking healthy.

@@ -14,6 +14,23 @@ type DebugTarget = {
   webSocketDebuggerUrl?: string;
 };
 
+export function selectCodexMainTarget(targets: DebugTarget[]): DebugTarget | undefined {
+  const candidates = targets.filter((target) =>
+    target.type === "page" && target.webSocketDebuggerUrl && target.url.startsWith("app://")
+  );
+  const isIndexDocument = (target: DebugTarget): boolean => {
+    try { return new URL(target.url).pathname === "/index.html"; }
+    catch { return false; }
+  };
+  const isAuxiliarySurface = (target: DebugTarget): boolean =>
+    /avatar-overlay|composition-surface/i.test(target.url);
+
+  return candidates.find((target) => isIndexDocument(target) && !new URL(target.url).search)
+    ?? candidates.find(isIndexDocument)
+    ?? candidates.find((target) => !isAuxiliarySurface(target) && !target.url.includes("initialRoute="))
+    ?? candidates.find((target) => !isAuxiliarySurface(target));
+}
+
 type CdpResponse = {
   id?: number;
   result?: { result?: { value?: unknown; description?: string }; exceptionDetails?: { text?: string; exception?: { description?: string } } };
@@ -346,8 +363,7 @@ export class CodexMicroRendererBridge {
   private async connect(): Promise<void> {
     const port = await discoverDebugPort();
     const targets = await fetchJson<DebugTarget[]>(`http://127.0.0.1:${port}/json/list`);
-    const candidates = targets.filter((target) => target.type === "page" && target.webSocketDebuggerUrl && target.url.startsWith("app://"));
-    const target = candidates.find((item) => !item.url.includes("initialRoute=")) ?? candidates[0];
+    const target = selectCodexMainTarget(targets);
     if (!target?.webSocketDebuggerUrl) throw new Error("Kein Codex-Hauptfenster mit Debug-Brücke gefunden.");
 
     const socket = new WebSocket(target.webSocketDebuggerUrl);

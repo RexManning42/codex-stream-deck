@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.6.1 - Unreleased
+
+- Fixed macOS Codex updates exposing avatar-overlay renderer targets before the real main window, which could stop relay snapshots and leave an agent key stuck in `working`.
+- Fixed remote agent commands for `client-new-thread:` task identities being rejected by the relay validator.
+
 ## 0.6.0 - 2026-07-18
 
 - Added the local macOS Codex Micro launcher and persistent LaunchAgent watcher.

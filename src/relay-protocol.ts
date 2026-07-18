@@ -169,5 +169,5 @@ function mirrorStatusPriority(status: string): number {
   return 0;
 }
 function isThreadKey(value: unknown): value is string {
-  return typeof value === "string" && /^(?:[a-z][a-z0-9_-]{0,15}:)?[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value);
+  return typeof value === "string" && /^(?:[a-z][a-z0-9_-]{0,31}:)?[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value);
 }

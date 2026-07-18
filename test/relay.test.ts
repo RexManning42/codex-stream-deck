@@ -43,6 +43,7 @@ test("relay command parser permits only the narrow native command surface", () =
   assert.equal(parseRelayCommand({ kind: "evaluate", expression: "process.exit()" }), null);
   assert.equal(parseRelayCommand({ kind: "keycap", keycapId: "NOT_REAL" }), null);
   assert.notEqual(parseRelayCommand({ kind: "agent", slot: 1, threadKey: "local:019f6de7-44c2-7fe2-9d17-9322c952e626", act: 1 }), null);
+  assert.notEqual(parseRelayCommand({ kind: "agent", slot: 0, threadKey: "client-new-thread:e3c18619-71ff-4a8d-8dd3-d475e9bcf162", act: 1 }), null);
   assert.equal(parseRelayCommand({ kind: "agent", slot: 1, threadKey: "local:../../secret", act: 1 }), null);
 });
 

@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
-import { REASONING_COMMANDS } from "../src/codex-micro-renderer-bridge.js";
+import { REASONING_COMMANDS, selectCodexMainTarget } from "../src/codex-micro-renderer-bridge.js";
 import { ADDITIONAL_KEYCAPS, OFFICIAL_KEYCAP_IDS } from "../src/keycaps.js";
 import { visualStatusFromMicro } from "../src/status.js";
 
@@ -34,6 +34,25 @@ test("renderer bridge uses native Micro events and discovers hashed modules at r
   assert.match(source, /codex-micro-agent-source/);
   assert.doesNotMatch(source, /candidate\?\.token === appScope/);
   assert.doesNotMatch(source, /D90_rd6W|SFcKxWqG|DJFcGyy5/);
+});
+
+test("renderer bridge prefers the main index document over macOS avatar surfaces", () => {
+  const target = selectCodexMainTarget([
+    { type: "page", url: "app://-/index.html?initialRoute=%2Favatar-overlay", webSocketDebuggerUrl: "ws://route" },
+    { type: "page", url: "app://-/avatar-overlay-composition-surface.html?surfaceId=mascot-badge", webSocketDebuggerUrl: "ws://mascot" },
+    { type: "page", url: "app://-/avatar-overlay-composition-surface.html?surfaceId=activity-slot-0", webSocketDebuggerUrl: "ws://slot" },
+    { type: "page", url: "app://-/index.html", webSocketDebuggerUrl: "ws://main" }
+  ]);
+
+  assert.equal(target?.webSocketDebuggerUrl, "ws://main");
+});
+
+test("renderer bridge rejects auxiliary-only renderer lists", () => {
+  const target = selectCodexMainTarget([
+    { type: "page", url: "app://-/avatar-overlay-composition-surface.html?surfaceId=mascot-badge", webSocketDebuggerUrl: "ws://mascot" }
+  ]);
+
+  assert.equal(target, undefined);
 });
 
 test("reasoning controls use the official native composer commands", async () => {

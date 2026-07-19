@@ -180,6 +180,7 @@ export function renderUsageLimitKey(window: UsageWindow | undefined, requestedKi
   const dash = remaining == null ? 0 : circumference * remaining / 100;
   const label = usageLabel(window?.kind ?? requestedKind);
   const digits = remaining == null ? 0 : String(remaining).length;
+  const numberX = digits >= 3 ? 61 : digits === 2 ? 65 : 69;
   const fontSize = digits >= 3 ? 27 : 30;
   return toDataUrl(`<svg xmlns="http://www.w3.org/2000/svg" width="144" height="144" viewBox="0 0 144 144">
     <defs>
@@ -195,7 +196,7 @@ export function renderUsageLimitKey(window: UsageWindow | undefined, requestedKi
     ${health === "degraded" || health === "offline" ? `<circle cx="72" cy="70" r="48" fill="none" stroke="${signal}" stroke-width="4" stroke-opacity=".13" filter="url(#usageGlow)"/>` : ""}
     ${remaining == null
       ? `<text x="72" y="80" text-anchor="middle" font-family="Bahnschrift, Segoe UI, Arial, sans-serif" font-size="31" font-weight="700" fill="${signal}">—</text>`
-      : `<text data-usage-value="${remaining}" x="72" y="80" text-anchor="middle" font-family="Bahnschrift, Segoe UI, Arial, sans-serif" font-weight="700"><tspan fill="${surface.title}" font-size="${fontSize}">${remaining}</tspan><tspan dx="2" dy="-8" fill="${signal}" font-size="12">%</tspan></text>`}
+      : `<text data-usage-value="${remaining}" x="${numberX}" y="80" text-anchor="middle" fill="${surface.title}" font-family="Bahnschrift, Segoe UI, Arial, sans-serif" font-size="${fontSize}" font-weight="700">${remaining}</text><g data-usage-percent="vector" transform="translate(87 57)" fill="none" stroke="${signal}" stroke-width="2.4" stroke-linecap="round"><circle cx="2.5" cy="2.5" r="1.7"/><circle cx="10" cy="12" r="1.7"/><path d="M11 1L1.5 13.5"/></g>`}
     <text x="72" y="126" text-anchor="middle" fill="${surface.title}" fill-opacity=".62" font-family="Bahnschrift, Segoe UI, Arial, sans-serif" font-size="11" font-weight="700" letter-spacing="1.2">${label}</text>
   </svg>`);
 }

@@ -37,10 +37,10 @@ test("usage selection prefers 5-hour but falls back to weekly", () => {
 test("single usage key preserves the circular design and centers numeric weight", () => {
   const healthy = decode(renderUsageLimitKey(fiveHour, "five-hour", "dark"));
   assert.match(healthy, /data-usage-remaining="74"/);
-  assert.match(healthy, />74<\/tspan>/);
-  assert.match(healthy, /<tspan dx="2" dy="-8"[^>]*>%<\/tspan>/);
+  assert.match(healthy, />74<\/text>/);
+  assert.match(healthy, /data-usage-percent="vector" transform="translate\(87 57\)"/);
   assert.match(healthy, />5H<\/text>/);
-  assert.match(healthy, /data-usage-value="74" x="72" y="80" text-anchor="middle"/);
+  assert.match(healthy, /data-usage-value="74" x="65" y="80" text-anchor="middle"/);
 
   const unavailable = decode(renderUsageLimitKey(undefined, "five-hour", "dark"));
   assert.match(unavailable, />—<\/text>/);

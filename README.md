@@ -89,7 +89,7 @@ The page-navigation and profile-switch keys are built-in Stream Deck actions. Al
 
 Add **Usage Limit** for the existing circular capacity display. Its Stream Deck property inspector can pin the key to **5 hours** or **Weekly**, while **Automatic** prefers 5 hours and falls back to weekly whenever Codex temporarily omits the shorter window. **Usage Overview** shows both windows as separate horizontal bars; a missing window stays visible as unavailable instead of being mistaken for zero capacity.
 
-**Rate Limit Reset** shows the number of credits Codex currently reports. The count remains centered inside the reset arrow and the action is dimmed when no credit is applicable. Consuming a credit requires holding the key for 1.2 seconds; a short tap does nothing. This action uses Codex's current native usage client and is therefore subject to the same undocumented compatibility boundary as the Micro bridge.
+**Rate Limit Reset** shows the number of credits Codex currently reports. The count remains centered inside the reset arrow and the action is dimmed only when no credit is available. Consuming a credit requires holding the key for 1.2 seconds; a short tap does nothing, and Codex's current applicability check still has to pass. This action uses Codex's current native usage client and is therefore subject to the same undocumented compatibility boundary as the Micro bridge.
 
 ## Official keycap SVGs are not included
 

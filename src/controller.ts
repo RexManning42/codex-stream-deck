@@ -380,8 +380,7 @@ export class DeckController {
       snapshot?.usage?.resetCreditsAvailable ?? null,
       progress,
       snapshot?.theme ?? "dark",
-      this.targetHealth().state,
-      snapshot?.usage?.resetCreditsApplicable ?? null
+      this.targetHealth().state
     ));
   }
 

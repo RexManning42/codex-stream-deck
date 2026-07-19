@@ -180,8 +180,6 @@ export function renderUsageLimitKey(window: UsageWindow | undefined, requestedKi
   const dash = remaining == null ? 0 : circumference * remaining / 100;
   const label = usageLabel(window?.kind ?? requestedKind);
   const digits = remaining == null ? 0 : String(remaining).length;
-  const numberX = digits >= 3 ? 65 : digits === 2 ? 68 : 70;
-  const percentX = digits >= 3 ? 96 : digits === 2 ? 93 : 87;
   const fontSize = digits >= 3 ? 27 : 30;
   return toDataUrl(`<svg xmlns="http://www.w3.org/2000/svg" width="144" height="144" viewBox="0 0 144 144">
     <defs>
@@ -197,7 +195,7 @@ export function renderUsageLimitKey(window: UsageWindow | undefined, requestedKi
     ${health === "degraded" || health === "offline" ? `<circle cx="72" cy="70" r="48" fill="none" stroke="${signal}" stroke-width="4" stroke-opacity=".13" filter="url(#usageGlow)"/>` : ""}
     ${remaining == null
       ? `<text x="72" y="80" text-anchor="middle" font-family="Bahnschrift, Segoe UI, Arial, sans-serif" font-size="31" font-weight="700" fill="${signal}">—</text>`
-      : `<text x="${numberX}" y="80" text-anchor="middle" fill="${surface.title}" font-family="Bahnschrift, Segoe UI, Arial, sans-serif" font-size="${fontSize}" font-weight="700">${remaining}</text><text x="${percentX}" y="69" fill="${signal}" font-family="Bahnschrift, Segoe UI, Arial, sans-serif" font-size="13" font-weight="700">%</text>`}
+      : `<text data-usage-value="${remaining}" x="72" y="80" text-anchor="middle" font-family="Bahnschrift, Segoe UI, Arial, sans-serif" font-weight="700"><tspan fill="${surface.title}" font-size="${fontSize}">${remaining}</tspan><tspan dx="2" dy="-8" fill="${signal}" font-size="12">%</tspan></text>`}
     <text x="72" y="126" text-anchor="middle" fill="${surface.title}" fill-opacity=".62" font-family="Bahnschrift, Segoe UI, Arial, sans-serif" font-size="11" font-weight="700" letter-spacing="1.2">${label}</text>
   </svg>`);
 }
@@ -219,12 +217,11 @@ export function renderRateLimitResetKey(
   available: number | null,
   holdProgress = 0,
   theme: ThemeMode = "dark",
-  health: HostHealthState = "ready",
-  applicable: number | null = available
+  health: HostHealthState = "ready"
 ): string {
   const surface = SURFACES[theme];
   const count = available == null ? null : Math.max(0, Math.floor(available));
-  const enabled = count != null && count > 0 && applicable !== 0 && health === "ready";
+  const enabled = count != null && count > 0 && health === "ready";
   const glyph = enabled ? (theme === "dark" ? "#F2F2EE" : "#24292D") : SIGNAL_COLORS[theme].empty;
   const countColor = enabled ? SIGNAL_COLORS[theme].thinking : SIGNAL_COLORS[theme].empty;
   const progress = clampPercent(holdProgress * 100);
@@ -241,7 +238,7 @@ export function renderRateLimitResetKey(
     <g transform="translate(33.6 30.6) scale(3.2)" fill="none" stroke="${glyph}" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
       <path d="M3 12a9 9 0 1 0 3-6.7L3 8"/><path d="M3 3v5h5"/>
     </g>
-    <text data-reset-credits="${count ?? "unknown"}" x="72" y="69" text-anchor="middle" dominant-baseline="central" fill="${countColor}" font-family="Bahnschrift, Segoe UI, Arial, sans-serif" font-size="23" font-weight="700">${count == null ? "—" : count > 99 ? "99+" : count}</text>
+    <text data-reset-credits="${count ?? "unknown"}" x="72" y="78" text-anchor="middle" fill="${countColor}" font-family="Bahnschrift, Segoe UI, Arial, sans-serif" font-size="23" font-weight="700">${count == null ? "—" : count > 99 ? "99+" : count}</text>
     ${progress > 0 ? `<circle data-reset-hold="${progress.toFixed(0)}" cx="72" cy="69" r="51" fill="none" stroke="${SIGNAL_COLORS[theme].thinking}" stroke-width="4" stroke-linecap="round" stroke-dasharray="${progressDash.toFixed(2)} ${(2 * Math.PI * 51).toFixed(2)}" transform="rotate(-90 72 69)"/><text x="72" y="128" text-anchor="middle" fill="${SIGNAL_COLORS[theme].thinking}" font-family="Bahnschrift, Segoe UI, Arial, sans-serif" font-size="10" font-weight="700" letter-spacing="1">HOLD</text>` : ""}
     ${health !== "ready" ? `<circle cx="122" cy="22" r="5" fill="${healthColor}"/>` : ""}
   </svg>`);

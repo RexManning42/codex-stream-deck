@@ -37,10 +37,10 @@ test("usage selection prefers 5-hour but falls back to weekly", () => {
 test("single usage key preserves the circular design and centers numeric weight", () => {
   const healthy = decode(renderUsageLimitKey(fiveHour, "five-hour", "dark"));
   assert.match(healthy, /data-usage-remaining="74"/);
-  assert.match(healthy, />74<\/text>/);
-  assert.match(healthy, />%<\/text>/);
+  assert.match(healthy, />74<\/tspan>/);
+  assert.match(healthy, /<tspan dx="2" dy="-8"[^>]*>%<\/tspan>/);
   assert.match(healthy, />5H<\/text>/);
-  assert.match(healthy, /x="68" y="80" text-anchor="middle"/);
+  assert.match(healthy, /data-usage-value="74" x="72" y="80" text-anchor="middle"/);
 
   const unavailable = decode(renderUsageLimitKey(undefined, "five-hour", "dark"));
   assert.match(unavailable, />—<\/text>/);
@@ -61,13 +61,13 @@ test("overview renders independent 5-hour and weekly progress bars", () => {
 
 test("reset key keeps the count in the fixed circle center and exposes hold progress", () => {
   const svg = decode(renderRateLimitResetKey(2, .5, "dark"));
-  assert.match(svg, /data-reset-credits="2" x="72" y="69" text-anchor="middle" dominant-baseline="central"/);
+  assert.match(svg, /data-reset-credits="2" x="72" y="78" text-anchor="middle"/);
   assert.match(svg, /data-reset-hold="50"/);
   assert.doesNotMatch(svg, /cx="106" cy="40"/);
 
-  const unavailable = decode(renderRateLimitResetKey(1, 0, "dark", "ready", 0));
-  assert.match(unavailable, /data-reset-credits="1"/);
-  assert.doesNotMatch(unavailable, /stop-opacity="\.13"/);
+  const available = decode(renderRateLimitResetKey(1, 0, "dark", "ready"));
+  assert.match(available, /data-reset-credits="1"/);
+  assert.match(available, /stop-opacity="\.13"/);
 });
 
 test("usage actions and property inspector are packaged without official keycap artwork", async () => {

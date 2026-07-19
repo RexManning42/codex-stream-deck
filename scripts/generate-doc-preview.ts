@@ -42,7 +42,7 @@ function renderUsagePreview(): string {
     { label: "Weekly limit", svg: svgFromDataUrl(renderUsageLimitKey(weekly, "weekly")) },
     { label: "Both windows", svg: svgFromDataUrl(renderUsageOverviewKey([fiveHour, weekly])) },
     { label: "2 resets", svg: svgFromDataUrl(renderRateLimitResetKey(2)) },
-    { label: "Not applicable", svg: svgFromDataUrl(renderRateLimitResetKey(1, 0, "dark", "ready", 0)) }
+    { label: "No resets", svg: svgFromDataUrl(renderRateLimitResetKey(0)) }
   ];
   const key = 144;
   const gap = 22;

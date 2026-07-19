@@ -52,8 +52,8 @@ The same plugin runs on Windows and macOS. It discovers the local loopback port 
 2. announce a connected Micro device state;
 3. read the native six-slot state, layout, agent source, and lighting preference;
 4. dispatch Micro HID and joystick events;
-5. invoke the internal reasoning-effort commands;
-6. resolve standalone keycap actions from Codex's live Micro keycap registry.
+5. emulate native encoder-rotation HID events for reasoning-effort changes;
+6. resolve standalone keycap actions from Codex's live Micro keycap registry and current official command runner.
 
 The bridge does not emulate a USB HID device and installs no driver.
 

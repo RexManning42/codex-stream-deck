@@ -1,11 +1,14 @@
 # Changelog
 
-## 0.6.2 - 2026-07-18
+## 0.6.2 - 2026-07-19
 
 - Added explicit per-host `READY`, `DEGRADED`, `CONNECT`, and `OFFLINE` state to the Windows/Mac target key.
 - Native-signal failures now emit a typed relay health event instead of leaving an authenticated connection looking healthy.
 - Detect stale remote snapshots from local receipt time, independent of clock differences between hosts.
 - Preserve last-known task placement during host failures while marking every affected agent tile orange for uncertain native signals or red for an offline relay; commands still fail safely instead of falling through to another host.
+- Restored relay smoke-test compatibility after health-only updates were separated from snapshot delivery.
+- Route reasoning up/down through Codex's native encoder-rotation HID events, matching the current Micro implementation after a Codex desktop update removed the old command-runner asset.
+- Resolve standalone keycap commands from the currently loaded official Micro bridge while retaining compatibility with older Codex builds.
 
 ## 0.6.1 - 2026-07-18
 

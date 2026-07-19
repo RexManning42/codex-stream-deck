@@ -35,7 +35,7 @@ export class CodexRelayClient {
 
   constructor(
     private readonly config: RelayClientConfig,
-    private readonly onUpdate: (snapshot?: HostSnapshot) => void,
+    private readonly onSnapshot: (snapshot: HostSnapshot) => void,
     private readonly log: (message: string) => void
   ) { validateRelayClientConfig(config); }
 
@@ -76,7 +76,6 @@ export class CodexRelayClient {
     if (this.stopped || this.connecting || this.socket?.readyState === WebSocket.OPEN) return;
     this.connecting = true;
     this.health = { state: "connecting", reason: "awaiting-snapshot", changedAt: Date.now() };
-    this.onUpdate(this.snapshot);
     try {
       const socket = new WebSocket(this.config.url, { handshakeTimeout: 4_000, maxPayload: 64 * 1024, perMessageDeflate: false });
       this.socket = socket;
@@ -87,7 +86,6 @@ export class CodexRelayClient {
     } catch (error) {
       this.health = { state: "offline", reason: "relay-disconnected", changedAt: Date.now() };
       this.log(`Remote relay connection failed: ${String(error)}`);
-      this.onUpdate(this.snapshot);
       this.scheduleReconnect();
     } finally { this.connecting = false; }
   }
@@ -102,17 +100,15 @@ export class CodexRelayClient {
       this.host = message.host;
       this.health = { state: "degraded", reason: "awaiting-snapshot", changedAt: Date.now() };
       this.log(`Remote Codex host connected: ${message.host.hostName} (${message.host.platform}).`);
-      this.onUpdate(this.snapshot);
     } else if (message.type === "snapshot") {
       this.host = message.host;
       this.snapshot = { host: message.host, snapshot: message.snapshot, observedAt: message.observedAt };
       this.lastSnapshotReceivedAt = Date.now();
       this.health = { state: "ready", changedAt: Date.now() };
-      this.onUpdate(this.snapshot);
+      this.onSnapshot(this.snapshot);
     } else if (message.type === "health") {
       this.host = message.host;
       this.health = { state: "degraded", reason: message.reason, changedAt: Date.now() };
-      this.onUpdate(this.snapshot);
     } else this.handleResult(message);
   }
 
@@ -130,7 +126,6 @@ export class CodexRelayClient {
     this.socket = undefined;
     this.health = { state: "offline", reason: "relay-disconnected", changedAt: Date.now() };
     this.rejectPending("Remote Codex relay disconnected.");
-    this.onUpdate(this.snapshot);
     this.scheduleReconnect();
   }
 

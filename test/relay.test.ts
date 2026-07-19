@@ -5,7 +5,7 @@ import WebSocket from "ws";
 import { CodexRelayClient, RELAY_SNAPSHOT_STALE_MS, resolveRelayHealth } from "../src/codex-relay-client.js";
 import { isAllowedRelayHost } from "../src/relay-network.js";
 import { CodexRelayServer, validateRelayServerConfig } from "../src/codex-relay-server.js";
-import { HostActivityIndex, RELAY_PROTOCOL_VERSION, parseRelayCommand } from "../src/relay-protocol.js";
+import { HostActivityIndex, RELAY_PROTOCOL_VERSION, parseRelayCommand, type HostSnapshot } from "../src/relay-protocol.js";
 import type { CodexHost, MicroSnapshot } from "../src/types.js";
 
 const host: CodexHost = { hostId: "56fd97ad-7073-42cc-85ce-befa17546d7c", hostName: "Test Mac", platform: "darwin" };
@@ -469,15 +469,19 @@ test("relay client preserves last-known tasks but marks their host offline after
     { enabled: true, listenHost: "127.0.0.1", port, token: "t".repeat(32) }, host, control, () => {}
   );
   await server.start();
+  const deliveredSnapshots: HostSnapshot[] = [];
   const client = new CodexRelayClient(
-    { enabled: true, url: `ws://127.0.0.1:${port}`, token: "t".repeat(32) }, () => {}, () => {}
+    { enabled: true, url: `ws://127.0.0.1:${port}`, token: "t".repeat(32) },
+    (value) => deliveredSnapshots.push(value), () => {}
   );
   client.start();
   await waitUntil(() => client.currentHealth().state === "ready");
+  assert.equal(deliveredSnapshots.length, 1);
   const lastKnown = client.currentSnapshot();
   assert.equal(lastKnown?.snapshot.slots[0]?.title, "Task 1");
   await server.close();
   await waitUntil(() => client.currentHealth().state === "offline");
+  assert.equal(deliveredSnapshots.length, 1, "health-only transitions must not call the snapshot callback");
   assert.equal(client.currentSnapshot(), lastKnown);
   assert.equal(client.isConnected(), false);
   client.close();

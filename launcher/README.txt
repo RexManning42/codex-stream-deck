@@ -35,5 +35,10 @@ line. The watcher keeps this dedicated SSH relay tunnel alive and
 does not reuse Codex desktop's remote-CLI SSH process. Restart the Stream Deck
 plugin, not Codex. Remove the relay with `-Disable`.
 
+Optional iPhone node: run `Configure-CodexDeckMobile.ps1`, reload only the
+Codex Deck Stream Deck plugin, and follow docs/IOS.md to expose the loopback
+listener privately through Tailscale Serve. The script prints the pairing
+token once. Disable it with `Configure-CodexDeckMobile.ps1 -Disable`.
+
 This is an unofficial compatibility bridge and may need an update after a Codex
 desktop release.

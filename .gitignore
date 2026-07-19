@@ -15,3 +15,5 @@ codex-deck-launcher-*.zip
 !.env.example
 *.tmp
 .DS_Store
+ios/**/xcuserdata/
+ios/DerivedData/

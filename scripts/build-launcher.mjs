@@ -21,7 +21,7 @@ await build({
 
 await cp(resolve("node_modules/ws"), resolve(output, "node_modules/ws"), { recursive: true });
 
-for (const filename of ["Start Codex Deck.cmd", "Start-CodexDeck.ps1", "Watch-CodexDeck.ps1", "Configure-CodexDeckRelay.ps1", "README.txt"]) {
+for (const filename of ["Start Codex Deck.cmd", "Start-CodexDeck.ps1", "Watch-CodexDeck.ps1", "Configure-CodexDeckRelay.ps1", "Configure-CodexDeckMobile.ps1", "README.txt"]) {
   await cp(resolve("launcher", filename), resolve(output, filename));
 }
 await cp(resolve("docs"), resolve(output, "docs"), { recursive: true });

@@ -16,6 +16,7 @@ The same Stream Deck plugin package works in all three modes. Install only the l
 | Windows only | Windows | Local Windows Codex | [Windows setup](docs/WINDOWS.md) |
 | Mac only | macOS | Local Mac Codex | [macOS setup](docs/MACOS.md) |
 | Windows + Mac | Windows | Both apps; six agents are merged | [Multi-host setup](docs/MULTI_HOST.md) |
+| iPhone companion | iOS | Private Mac + Windows nodes | [iPhone app](docs/IOS.md) |
 
 Windows-only and Mac-only mode have no relay, no second computer dependency, and no host badges. Multi-host mode is optional and can be disabled without changing the local bridge on either machine.
 
@@ -34,6 +35,7 @@ Windows-only and Mac-only mode have no relay, no second computer dependency, and
 - Optional local loading of official keycap SVGs; those protected files are never included in this repository or its releases.
 - Optional authenticated SSH/Tailscale relay for one Stream Deck controlling Windows and Mac Codex together.
 - Per-host health on the Windows/Mac target key, with last-known agent tiles visibly marked when native desktop signals are uncertain or the relay is offline.
+- Native SwiftUI iPhone companion with dual-host agents, usage, reset credits, and authenticated Micro controls over private Tailscale HTTPS.
 
 ## Requirements
 

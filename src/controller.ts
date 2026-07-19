@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { codexDeckStateRoot } from "./codex-deck-paths.js";
 import { isRemoteControlRequest, readControlTarget, writeControlTarget, type HostPlatform as ControlTarget } from "./control-target.js";
 import { CodexRelayClient, readRelayClientConfig } from "./codex-relay-client.js";
+import { CodexRelayServer, readRelayServerConfig } from "./codex-relay-server.js";
 import { CodexMicroRendererBridge } from "./codex-micro-renderer-bridge.js";
 import { getOrCreateHostIdentity } from "./host-identity.js";
 import type { OfficialKeycapId } from "./keycaps.js";
@@ -49,6 +50,7 @@ export class DeckController {
   private readonly pressedAgents = new Map<number, RoutedAgentSlot>();
   private readonly pressedControlTargets = new Map<string, string>();
   private relayClient?: CodexRelayClient;
+  private mobileRelayServer?: CodexRelayServer;
   private localHost?: CodexHost;
   private localSnapshot?: HostSnapshot;
   private routedSlots: RoutedAgentSlot[] = [];
@@ -80,6 +82,36 @@ export class DeckController {
       );
       this.relayClient.start();
     }
+    try {
+      const mobileRelayConfig = await readRelayServerConfig(join(codexDeckStateRoot(), "mobile-relay-server.json"));
+      if (mobileRelayConfig) {
+        const mobileControl = {
+          refresh: async () => {
+            if (this.localHealth.state === "ready" && this.localSnapshot && Date.now() - this.localSnapshot.observedAt < 5_000) {
+              return this.localSnapshot.snapshot;
+            }
+            return this.microBridge.refresh();
+          },
+          sendAgent: this.microBridge.sendAgent.bind(this.microBridge),
+          sendAction: this.microBridge.sendAction.bind(this.microBridge),
+          sendJoystick: this.microBridge.sendJoystick.bind(this.microBridge),
+          sendEncoder: this.microBridge.sendEncoder.bind(this.microBridge),
+          adjustReasoning: this.microBridge.adjustReasoning.bind(this.microBridge),
+          runKeycap: this.microBridge.runKeycap.bind(this.microBridge),
+          consumeRateLimitReset: this.microBridge.consumeRateLimitReset.bind(this.microBridge)
+        };
+        this.mobileRelayServer = new CodexRelayServer(
+          mobileRelayConfig,
+          this.localHost,
+          mobileControl,
+          (message) => streamDeck.logger.info(`Mobile relay: ${message}`)
+        );
+        await this.mobileRelayServer.start();
+      }
+    } catch (error) {
+      this.mobileRelayServer = undefined;
+      streamDeck.logger.error(`Optional mobile relay was not started: ${String(error)}`);
+    }
     await this.refresh();
     this.scheduleRefresh();
     this.scheduleAnimation();
@@ -90,6 +122,7 @@ export class DeckController {
     if (this.poll) clearInterval(this.poll);
     if (this.animation) clearInterval(this.animation);
     this.relayClient?.close();
+    void this.mobileRelayServer?.close();
     this.microBridge.close();
   }
 

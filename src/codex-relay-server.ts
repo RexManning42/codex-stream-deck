@@ -1,4 +1,5 @@
 import { timingSafeEqual } from "node:crypto";
+import { readFile } from "node:fs/promises";
 import { isAllowedRelayHost } from "./relay-network.js";
 import { WebSocketServer, WebSocket } from "ws";
 import type { OfficialKeycapId } from "./keycaps.js";
@@ -178,6 +179,18 @@ export function validateRelayServerConfig(config: RelayServerConfig): void {
   if (!config.listenHost || !isAllowedRelayHost(config.listenHost.trim())) throw new Error("Relay listenHost must be loopback or a specific Tailscale address.");
   if (!Number.isInteger(config.port) || config.port < 1024 || config.port > 65_535) throw new Error("Relay port must be between 1024 and 65535.");
   if (typeof config.token !== "string" || Buffer.byteLength(config.token, "utf8") < 32) throw new Error("Relay token must contain at least 32 bytes.");
+}
+
+export async function readRelayServerConfig(path: string): Promise<RelayServerConfig | null> {
+  try {
+    const value = JSON.parse(await readFile(path, "utf8")) as RelayServerConfig;
+    if (!value.enabled) return null;
+    validateRelayServerConfig(value);
+    return value;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
+    throw error;
+  }
 }
 
 async function executeRelayCommand(control: RelayControl, command: RelayCommand): Promise<void> {

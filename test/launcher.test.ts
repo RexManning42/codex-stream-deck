@@ -52,6 +52,7 @@ test("startup monitoring survives Codex updates without duplicate watchers", asy
   assert.match(launcher, /LocalAppData.*CodexDeck.*launcher/is);
   assert.match(build, /Watch-CodexDeck\.ps1/);
   assert.match(build, /Configure-CodexDeckRelay\.ps1/);
+  assert.match(build, /Configure-CodexDeckMobile\.ps1/);
   assert.match(build, /replace\(\/\\r\\n\/g, "\\n"\)/);
 });
 

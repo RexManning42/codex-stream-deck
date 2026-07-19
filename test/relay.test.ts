@@ -1,10 +1,13 @@
 import assert from "node:assert/strict";
 import { createServer } from "node:net";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import test from "node:test";
 import WebSocket from "ws";
 import { CodexRelayClient, RELAY_SNAPSHOT_STALE_MS, resolveRelayHealth } from "../src/codex-relay-client.js";
 import { isAllowedRelayHost } from "../src/relay-network.js";
-import { CodexRelayServer, validateRelayServerConfig } from "../src/codex-relay-server.js";
+import { CodexRelayServer, readRelayServerConfig, validateRelayServerConfig } from "../src/codex-relay-server.js";
 import { HostActivityIndex, RELAY_PROTOCOL_VERSION, parseRelayCommand, type HostSnapshot } from "../src/relay-protocol.js";
 import type { CodexHost, MicroSnapshot } from "../src/types.js";
 
@@ -34,6 +37,22 @@ test("relay refuses wildcard exposure and short authentication tokens", () => {
   assert.equal(isAllowedRelayHost("100.64.0.42"), true);
   assert.equal(isAllowedRelayHost("example.tailnet.ts.net"), true);
   assert.equal(isAllowedRelayHost("8.8.8.8"), false);
+});
+
+test("optional mobile relay config is absent-safe and validates before startup", async () => {
+  const root = await mkdtemp(join(tmpdir(), "codex-mobile-relay-"));
+  try {
+    const path = join(root, "mobile-relay-server.json");
+    assert.equal(await readRelayServerConfig(path), null);
+    await writeFile(path, JSON.stringify({ enabled: true, listenHost: "127.0.0.1", port: 47_652, token: "m".repeat(32) }));
+    assert.deepEqual(await readRelayServerConfig(path), {
+      enabled: true, listenHost: "127.0.0.1", port: 47_652, token: "m".repeat(32)
+    });
+    await writeFile(path, JSON.stringify({ enabled: true, listenHost: "0.0.0.0", port: 47_652, token: "m".repeat(32) }));
+    await assert.rejects(readRelayServerConfig(path), /loopback or a specific Tailscale address/);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
 });
 
 test("relay command parser permits only the narrow native command surface", () => {

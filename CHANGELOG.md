@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.6.3 - 2026-07-19
+
+- Fix completed tasks remaining stuck in the green finished state after they are opened.
+- Track each structural `task_complete` revision instead of comparing rollout modification times, so harmless file touches cannot resurrect an acknowledged completion.
+- Detect the task currently open in each Codex renderer even when it is outside that host's six native Micro slots.
+- Propagate the content-free active-task and completion-revision signals through the authenticated multi-host relay, allowing a mirrored task opened on either computer to clear correctly.
+- Preserve the visible completion transition for a task that was already open while it ran; only a later activation or Stream Deck press acknowledges it.
+- Prevent delayed completion metadata from overriding a newer native working/thinking state.
+
 ## 0.6.2 - 2026-07-19
 
 - Added explicit per-host `READY`, `DEGRADED`, `CONNECT`, and `OFFLINE` state to the Windows/Mac target key.

@@ -1,6 +1,6 @@
 {
   "name": "codex-stream-deck",
-  "version": "0.6.2",
+  "version": "0.6.3",
   "private": false,
   "type": "module",
   "description": "Unofficial Codex Micro bridge for Stream Deck on Windows and macOS, with optional multi-host relay",

@@ -40,6 +40,7 @@ test("relay command parser permits only the narrow native command surface", () =
   const threadKey = "00000000-0000-4000-8000-000000000005";
   assert.deepEqual(parseRelayCommand({ kind: "agent", slot: 5, threadKey, act: 1 }), { kind: "agent", slot: 5, threadKey, act: 1 });
   assert.deepEqual(parseRelayCommand({ kind: "reasoning", direction: "increase" }), { kind: "reasoning", direction: "increase" });
+  assert.deepEqual(parseRelayCommand({ kind: "rate-limit-reset" }), { kind: "rate-limit-reset" });
   assert.equal(parseRelayCommand({ kind: "agent", slot: 6, threadKey, act: 1 }), null);
   assert.equal(parseRelayCommand({ kind: "evaluate", expression: "process.exit()" }), null);
   assert.equal(parseRelayCommand({ kind: "keycap", keycapId: "NOT_REAL" }), null);
@@ -56,6 +57,16 @@ test("relay snapshot parser bounds and validates host session catalogs", async (
   assert.notEqual(parseRelayServerMessage(valid), null);
   valid.snapshot.activeThreadKey = "local:00000000-0000-4000-8000-000000000000";
   assert.notEqual(parseRelayServerMessage(valid), null);
+  valid.snapshot.usage = {
+    windows: [{ id: "weekly", kind: "weekly", usedPercent: 35, remainingPercent: 65, windowDurationMins: 10_080, resetsAt: 1_800_000_000_000 }],
+    observedAt: 1_700_000_000_000,
+    resetCreditsAvailable: 1,
+    resetCreditsApplicable: 0
+  };
+  assert.notEqual(parseRelayServerMessage(valid), null);
+  const invalidUsage = structuredClone(valid);
+  invalidUsage.snapshot.usage!.windows[0]!.remainingPercent = 101;
+  assert.equal(parseRelayServerMessage(invalidUsage), null);
   valid.snapshot.activeThreadKey = "local:not-a-thread";
   assert.equal(parseRelayServerMessage(valid), null);
   delete valid.snapshot.activeThreadKey;
@@ -427,7 +438,7 @@ test("authenticated relay publishes snapshots and dispatches typed commands", as
     refresh: async () => snapshot,
     sendAgent: async (slot: number, act: 0 | 1) => { calls.push(["agent", slot, act]); },
     sendAction: async () => {}, sendJoystick: async () => {}, sendEncoder: async () => {},
-    adjustReasoning: async () => {}, runKeycap: async () => {}
+    adjustReasoning: async () => {}, runKeycap: async () => {}, consumeRateLimitReset: async () => {}
   };
   const server = new CodexRelayServer(
     { enabled: true, listenHost: "127.0.0.1", port, token: "t".repeat(32) }, host, control, () => {}
@@ -459,7 +470,7 @@ test("relay rejects a client with the wrong token before publishing state", asyn
   const control = {
     refresh: async () => { refreshes += 1; return snapshot; },
     sendAgent: async () => {}, sendAction: async () => {}, sendJoystick: async () => {},
-    sendEncoder: async () => {}, adjustReasoning: async () => {}, runKeycap: async () => {}
+    sendEncoder: async () => {}, adjustReasoning: async () => {}, runKeycap: async () => {}, consumeRateLimitReset: async () => {}
   };
   const server = new CodexRelayServer(
     { enabled: true, listenHost: "127.0.0.1", port, token: "t".repeat(32) }, host, control, () => {}
@@ -480,7 +491,7 @@ test("authenticated relay survives an unavailable Codex snapshot", async () => {
   const control = {
     refresh: async (): Promise<MicroSnapshot> => { throw new Error("bridge offline"); },
     sendAgent: async () => {}, sendAction: async () => {}, sendJoystick: async () => {},
-    sendEncoder: async () => {}, adjustReasoning: async () => {}, runKeycap: async () => {}
+    sendEncoder: async () => {}, adjustReasoning: async () => {}, runKeycap: async () => {}, consumeRateLimitReset: async () => {}
   };
   const server = new CodexRelayServer(
     { enabled: true, listenHost: "127.0.0.1", port, token: "t".repeat(32) }, host, control,
@@ -507,7 +518,7 @@ test("relay client preserves last-known tasks but marks their host offline after
   const control = {
     refresh: async () => snapshot,
     sendAgent: async () => {}, sendAction: async () => {}, sendJoystick: async () => {},
-    sendEncoder: async () => {}, adjustReasoning: async () => {}, runKeycap: async () => {}
+    sendEncoder: async () => {}, adjustReasoning: async () => {}, runKeycap: async () => {}, consumeRateLimitReset: async () => {}
   };
   const server = new CodexRelayServer(
     { enabled: true, listenHost: "127.0.0.1", port, token: "t".repeat(32) }, host, control, () => {}

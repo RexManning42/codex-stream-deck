@@ -1,4 +1,5 @@
-import type { AgentVisualStatus, HostHealthState, ThemeMode } from "./types.js";
+import type { AgentVisualStatus, HostHealthState, ThemeMode, UsageWindow, UsageWindowKind } from "./types.js";
+import { clampPercent, usageLabel } from "./usage.js";
 
 export type BuiltinIconName = "back" | "forward" | "sidebar" | "home" | "navigation";
 
@@ -168,6 +169,102 @@ export function renderHostTargetKey(label: "WIN" | "MAC", health: HostHealthStat
     <circle cx="72" cy="91" r="5" fill="${signal}"/><circle cx="72" cy="91" r="11" fill="${signal}" fill-opacity=".10"/>
     <text x="72" y="116" text-anchor="middle" font-family="Bahnschrift, Segoe UI Variable Display, Segoe UI, Arial, sans-serif" font-size="${health === "degraded" ? 11 : 12}" font-weight="700" letter-spacing="1" fill="${signal}">${status}</text>
   </svg>`);
+}
+
+export function renderUsageLimitKey(window: UsageWindow | undefined, requestedKind: UsageWindowKind, theme: ThemeMode = "dark", health: HostHealthState = "ready"): string {
+  const surface = SURFACES[theme];
+  const remaining = window ? Math.round(clampPercent(window.remainingPercent)) : null;
+  const signal = usageSignal(remaining, health, theme);
+  const track = theme === "dark" ? "#45494C" : "#AAB2B8";
+  const circumference = 2 * Math.PI * 40;
+  const dash = remaining == null ? 0 : circumference * remaining / 100;
+  const label = usageLabel(window?.kind ?? requestedKind);
+  const digits = remaining == null ? 0 : String(remaining).length;
+  const numberX = digits >= 3 ? 65 : digits === 2 ? 68 : 70;
+  const percentX = digits >= 3 ? 96 : digits === 2 ? 93 : 87;
+  const fontSize = digits >= 3 ? 27 : 30;
+  return toDataUrl(`<svg xmlns="http://www.w3.org/2000/svg" width="144" height="144" viewBox="0 0 144 144">
+    <defs>
+      <linearGradient id="keycap" x1="0" y1="0" x2="0" y2="1"><stop stop-color="${surface.keyTop}"/><stop offset=".52" stop-color="${surface.keyMiddle}"/><stop offset="1" stop-color="${surface.keyBottom}"/></linearGradient>
+      <radialGradient id="usageBloom" cx="50%" cy="52%" r="52%"><stop stop-color="${signal}" stop-opacity=".13"/><stop offset=".76" stop-color="${signal}" stop-opacity=".02"/><stop offset="1" stop-color="${signal}" stop-opacity="0"/></radialGradient>
+      <filter id="usageGlow" x="-30%" y="-30%" width="160%" height="160%"><feGaussianBlur stdDeviation="4"/></filter>
+    </defs>
+    <rect data-theme="${theme}" x="4" y="4" width="136" height="136" rx="18" fill="url(#keycap)" stroke="${surface.border}" stroke-width="2" stroke-opacity="${theme === "dark" ? ".88" : ".34"}"/>
+    <rect x="7.5" y="7.5" width="129" height="129" rx="15" fill="none" stroke="${surface.innerBorder}" stroke-width="1"/>
+    <circle cx="72" cy="70" r="55" fill="url(#usageBloom)"/>
+    <circle cx="72" cy="70" r="40" fill="none" stroke="${track}" stroke-width="7"/>
+    ${remaining == null ? "" : `<circle data-usage-remaining="${remaining}" cx="72" cy="70" r="40" fill="none" stroke="${signal}" stroke-width="7" stroke-linecap="round" stroke-dasharray="${dash.toFixed(2)} ${circumference.toFixed(2)}" transform="rotate(-90 72 70)"/>`}
+    ${health === "degraded" || health === "offline" ? `<circle cx="72" cy="70" r="48" fill="none" stroke="${signal}" stroke-width="4" stroke-opacity=".13" filter="url(#usageGlow)"/>` : ""}
+    ${remaining == null
+      ? `<text x="72" y="80" text-anchor="middle" font-family="Bahnschrift, Segoe UI, Arial, sans-serif" font-size="31" font-weight="700" fill="${signal}">—</text>`
+      : `<text x="${numberX}" y="80" text-anchor="middle" fill="${surface.title}" font-family="Bahnschrift, Segoe UI, Arial, sans-serif" font-size="${fontSize}" font-weight="700">${remaining}</text><text x="${percentX}" y="69" fill="${signal}" font-family="Bahnschrift, Segoe UI, Arial, sans-serif" font-size="13" font-weight="700">%</text>`}
+    <text x="72" y="126" text-anchor="middle" fill="${surface.title}" fill-opacity=".62" font-family="Bahnschrift, Segoe UI, Arial, sans-serif" font-size="11" font-weight="700" letter-spacing="1.2">${label}</text>
+  </svg>`);
+}
+
+export function renderUsageOverviewKey(usageWindows: UsageWindow[], theme: ThemeMode = "dark", health: HostHealthState = "ready"): string {
+  const surface = SURFACES[theme];
+  const fiveHour = usageWindows.find((window) => window.kind === "five-hour");
+  const weekly = usageWindows.find((window) => window.kind === "weekly");
+  return toDataUrl(`<svg xmlns="http://www.w3.org/2000/svg" width="144" height="144" viewBox="0 0 144 144">
+    <defs><linearGradient id="keycap" x1="0" y1="0" x2="0" y2="1"><stop stop-color="${surface.keyTop}"/><stop offset=".52" stop-color="${surface.keyMiddle}"/><stop offset="1" stop-color="${surface.keyBottom}"/></linearGradient></defs>
+    <rect data-theme="${theme}" x="4" y="4" width="136" height="136" rx="18" fill="url(#keycap)" stroke="${surface.border}" stroke-width="2" stroke-opacity="${theme === "dark" ? ".88" : ".34"}"/>
+    <rect x="7.5" y="7.5" width="129" height="129" rx="15" fill="none" stroke="${surface.innerBorder}" stroke-width="1"/>
+    ${renderUsageBar("5H", fiveHour, 33, surface, theme, health)}
+    ${renderUsageBar("WK", weekly, 82, surface, theme, health)}
+  </svg>`);
+}
+
+export function renderRateLimitResetKey(
+  available: number | null,
+  holdProgress = 0,
+  theme: ThemeMode = "dark",
+  health: HostHealthState = "ready",
+  applicable: number | null = available
+): string {
+  const surface = SURFACES[theme];
+  const count = available == null ? null : Math.max(0, Math.floor(available));
+  const enabled = count != null && count > 0 && applicable !== 0 && health === "ready";
+  const glyph = enabled ? (theme === "dark" ? "#F2F2EE" : "#24292D") : SIGNAL_COLORS[theme].empty;
+  const countColor = enabled ? SIGNAL_COLORS[theme].thinking : SIGNAL_COLORS[theme].empty;
+  const progress = clampPercent(holdProgress * 100);
+  const progressDash = 2 * Math.PI * 51 * progress / 100;
+  const healthColor = usageSignal(null, health, theme);
+  return toDataUrl(`<svg xmlns="http://www.w3.org/2000/svg" width="144" height="144" viewBox="0 0 144 144">
+    <defs>
+      <linearGradient id="keycap" x1="0" y1="0" x2="0" y2="1"><stop stop-color="${surface.keyTop}"/><stop offset=".52" stop-color="${surface.keyMiddle}"/><stop offset="1" stop-color="${surface.keyBottom}"/></linearGradient>
+      <radialGradient id="resetBloom" cx="50%" cy="50%" r="50%"><stop stop-color="${countColor}" stop-opacity="${enabled ? ".13" : "0"}"/><stop offset="1" stop-color="${countColor}" stop-opacity="0"/></radialGradient>
+    </defs>
+    <rect data-theme="${theme}" x="4" y="4" width="136" height="136" rx="18" fill="url(#keycap)" stroke="${surface.border}" stroke-width="2" stroke-opacity="${theme === "dark" ? ".88" : ".34"}"/>
+    <rect x="7.5" y="7.5" width="129" height="129" rx="15" fill="none" stroke="${surface.innerBorder}" stroke-width="1"/>
+    <circle cx="72" cy="69" r="54" fill="url(#resetBloom)"/>
+    <g transform="translate(33.6 30.6) scale(3.2)" fill="none" stroke="${glyph}" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M3 12a9 9 0 1 0 3-6.7L3 8"/><path d="M3 3v5h5"/>
+    </g>
+    <text data-reset-credits="${count ?? "unknown"}" x="72" y="69" text-anchor="middle" dominant-baseline="central" fill="${countColor}" font-family="Bahnschrift, Segoe UI, Arial, sans-serif" font-size="23" font-weight="700">${count == null ? "—" : count > 99 ? "99+" : count}</text>
+    ${progress > 0 ? `<circle data-reset-hold="${progress.toFixed(0)}" cx="72" cy="69" r="51" fill="none" stroke="${SIGNAL_COLORS[theme].thinking}" stroke-width="4" stroke-linecap="round" stroke-dasharray="${progressDash.toFixed(2)} ${(2 * Math.PI * 51).toFixed(2)}" transform="rotate(-90 72 69)"/><text x="72" y="128" text-anchor="middle" fill="${SIGNAL_COLORS[theme].thinking}" font-family="Bahnschrift, Segoe UI, Arial, sans-serif" font-size="10" font-weight="700" letter-spacing="1">HOLD</text>` : ""}
+    ${health !== "ready" ? `<circle cx="122" cy="22" r="5" fill="${healthColor}"/>` : ""}
+  </svg>`);
+}
+
+function renderUsageBar(label: string, window: UsageWindow | undefined, y: number, surface: SurfacePalette, theme: ThemeMode, health: HostHealthState): string {
+  const remaining = window ? Math.round(clampPercent(window.remainingPercent)) : null;
+  const signal = usageSignal(remaining, health, theme);
+  const track = theme === "dark" ? "#45494C" : "#AAB2B8";
+  const width = remaining == null ? 0 : 96 * remaining / 100;
+  return `<g data-usage-window="${label}">
+    <text x="24" y="${y}" fill="${surface.title}" fill-opacity=".72" font-family="Bahnschrift, Segoe UI, Arial, sans-serif" font-size="12" font-weight="700" letter-spacing=".8">${label}</text>
+    <text x="120" y="${y}" text-anchor="end" fill="${remaining == null ? signal : surface.title}" font-family="Bahnschrift, Segoe UI, Arial, sans-serif" font-size="14" font-weight="700">${remaining == null ? "—" : `${remaining}%`}</text>
+    <rect x="24" y="${y + 10}" width="96" height="10" rx="5" fill="${track}"/>
+    ${remaining == null ? "" : `<rect data-usage-remaining="${remaining}" x="24" y="${y + 10}" width="${width.toFixed(2)}" height="10" rx="5" fill="${signal}"/>`}
+  </g>`;
+}
+
+function usageSignal(remaining: number | null, health: HostHealthState, theme: ThemeMode): string {
+  if (health === "offline") return SIGNAL_COLORS[theme].error;
+  if (health === "degraded" || health === "connecting") return SIGNAL_COLORS[theme].input;
+  if (remaining == null) return SIGNAL_COLORS[theme].empty;
+  return remaining <= 20 ? SIGNAL_COLORS[theme].error : SIGNAL_COLORS[theme].complete;
 }
 
 export function escapeXml(value: string): string {

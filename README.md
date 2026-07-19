@@ -27,6 +27,8 @@ Windows-only and Mac-only mode have no relay, no second computer dependency, and
 - Native key-down/key-up handling for Micro slots `ACT06` through `ACT12`.
 - Native joystick up, right, down, left, and encoder click.
 - Dedicated reasoning-effort up/down buttons with press-and-hold repeat.
+- Live usage controls: a configurable circular 5-hour/weekly limit key and a two-window overview.
+- A centered reset-credit counter with a deliberate 1.2-second hold before an applicable credit can be consumed.
 - A local `codex://threads/new` action for a new task.
 - Standalone actions for all official single-size keycaps, resolved from the installed Codex build at runtime.
 - Optional local loading of official keycap SVGs; those protected files are never included in this repository or its releases.
@@ -80,6 +82,14 @@ The action names describe the default Codex Micro setup. The keys always follow 
 ²Use the target key only in Windows + Mac mode. In a single-computer setup, leave it empty or replace it with another keycap action. ³Configure Stream Deck's built-in **Switch Profile** action to return to your own standard profile; no user-specific profile ID is distributed.
 
 The page-navigation and profile-switch keys are built-in Stream Deck actions. All other named controls come from Codex Deck. Every official Codex Micro keycap is also exposed as a standalone action, so extra pages can be customized without changing the six synchronized Micro action slots.
+
+### Usage and reset controls
+
+![Usage limit, overview, and reset-credit controls](docs/assets/usage-controls-preview.svg)
+
+Add **Usage Limit** for the existing circular capacity display. Its Stream Deck property inspector can pin the key to **5 hours** or **Weekly**, while **Automatic** prefers 5 hours and falls back to weekly whenever Codex temporarily omits the shorter window. **Usage Overview** shows both windows as separate horizontal bars; a missing window stays visible as unavailable instead of being mistaken for zero capacity.
+
+**Rate Limit Reset** shows the number of credits Codex currently reports. The count remains centered inside the reset arrow and the action is dimmed when no credit is applicable. Consuming a credit requires holding the key for 1.2 seconds; a short tap does nothing. This action uses Codex's current native usage client and is therefore subject to the same undocumented compatibility boundary as the Micro bridge.
 
 ## Official keycap SVGs are not included
 

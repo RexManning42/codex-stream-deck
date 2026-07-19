@@ -8,10 +8,17 @@ import { CodexMicroRendererBridge } from "./codex-micro-renderer-bridge.js";
 import { getOrCreateHostIdentity } from "./host-identity.js";
 import type { OfficialKeycapId } from "./keycaps.js";
 import { HostActivityIndex, type HostSnapshot, type RelayCommand } from "./relay-protocol.js";
-import { renderAgentKey, renderBuiltinKeycap, renderFallbackKeycap, renderHostTargetKey, renderImportedKeycap, type BuiltinIconName } from "./render.js";
+import {
+  renderAgentKey, renderBuiltinKeycap, renderFallbackKeycap, renderHostTargetKey, renderImportedKeycap,
+  renderRateLimitResetKey, renderUsageLimitKey, renderUsageOverviewKey, type BuiltinIconName
+} from "./render.js";
 import { openCodexThread } from "./codex-open.js";
 import { visualStatusFromMicro } from "./status.js";
-import type { CodexHost, HostHealth, MicroActionSlot, MicroDirection, MicroSnapshot, ReasoningAdjustment, RoutedAgentSlot } from "./types.js";
+import type {
+  CodexHost, HostHealth, MicroActionSlot, MicroDirection, MicroSnapshot, ReasoningAdjustment,
+  RoutedAgentSlot, UsageLimitMode, UsageWindowKind
+} from "./types.js";
+import { selectUsageWindow } from "./usage.js";
 
 export type FixedIconSource =
   | { kind: "local"; keycapId: string }
@@ -20,9 +27,11 @@ export type FixedIconSource =
 type FixedIconRegistration = { action: KeyAction; source: FixedIconSource };
 type AgentRegistration = { action: KeyAction; slot: number };
 type MicroActionRegistration = { action: KeyAction; slot: MicroActionSlot };
+type UsageLimitRegistration = { action: KeyAction; mode: UsageLimitMode };
 type ActionIdentity = { id: string };
 
 const USER_ICON_ROOT = join(codexDeckStateRoot(), "icons");
+const RESET_HOLD_MS = 1_200;
 
 export class DeckController {
   private readonly microBridge = new CodexMicroRendererBridge((message) => streamDeck.logger.info(message));
@@ -32,6 +41,10 @@ export class DeckController {
   private readonly keycapImages = new Map<string, Promise<string | null>>();
   private readonly lastImages = new Map<string, string>();
   private readonly hostToggleActions = new Map<string, KeyAction>();
+  private readonly usageLimitActions = new Map<string, UsageLimitRegistration>();
+  private readonly usageOverviewActions = new Map<string, KeyAction>();
+  private readonly rateLimitResetActions = new Map<string, KeyAction>();
+  private readonly resetHolds = new Map<string, number>();
   private readonly activityIndex = new HostActivityIndex();
   private readonly pressedAgents = new Map<number, RoutedAgentSlot>();
   private readonly pressedControlTargets = new Map<string, string>();
@@ -115,6 +128,59 @@ export class DeckController {
   unregisterHostToggle(action: ActionIdentity): void {
     this.hostToggleActions.delete(action.id);
     this.lastImages.delete(action.id);
+  }
+
+  registerUsageLimit(action: KeyAction, mode: UsageLimitMode): void {
+    this.usageLimitActions.set(action.id, { action, mode });
+    void this.renderUsageLimit({ action, mode });
+  }
+
+  updateUsageLimitMode(action: KeyAction, mode: UsageLimitMode): void {
+    this.usageLimitActions.set(action.id, { action, mode });
+    void this.renderUsageLimit({ action, mode });
+  }
+
+  unregisterUsageLimit(action: ActionIdentity): void {
+    this.unregister(action, this.usageLimitActions);
+  }
+
+  registerUsageOverview(action: KeyAction): void {
+    this.usageOverviewActions.set(action.id, action);
+    void this.renderUsageOverview(action);
+  }
+
+  unregisterUsageOverview(action: ActionIdentity): void {
+    this.unregister(action, this.usageOverviewActions);
+  }
+
+  registerRateLimitReset(action: KeyAction): void {
+    this.rateLimitResetActions.set(action.id, action);
+    void this.renderRateLimitReset(action);
+  }
+
+  unregisterRateLimitReset(action: ActionIdentity): void {
+    this.resetHolds.delete(action.id);
+    this.unregister(action, this.rateLimitResetActions);
+  }
+
+  beginRateLimitReset(action: ActionIdentity): void {
+    this.resetHolds.set(action.id, Date.now());
+    const registered = this.rateLimitResetActions.get(action.id);
+    if (registered) void this.renderRateLimitReset(registered);
+  }
+
+  async finishRateLimitReset(action: ActionIdentity): Promise<boolean> {
+    const startedAt = this.resetHolds.get(action.id);
+    this.resetHolds.delete(action.id);
+    const registered = this.rateLimitResetActions.get(action.id);
+    if (registered) await this.renderRateLimitReset(registered);
+    if (startedAt == null || Date.now() - startedAt < RESET_HOLD_MS) return false;
+    const usage = this.targetSnapshot()?.usage;
+    if ((usage?.resetCreditsAvailable ?? 0) <= 0) throw new Error("No rate-limit reset credit is available.");
+    if (usage?.resetCreditsApplicable === 0) throw new Error("No rate-limit reset credit is currently applicable.");
+    await this.sendToTarget({ kind: "rate-limit-reset" }, () => this.microBridge.consumeRateLimitReset());
+    await this.refresh();
+    return true;
   }
 
   async toggleTargetHost(): Promise<void> {
@@ -240,7 +306,10 @@ export class DeckController {
       ...[...this.agents.values()].map((registration) => this.renderAgent(registration)),
       ...[...this.microActions.values()].map((registration) => this.renderMicroAction(registration)),
       ...[...this.fixedActions.values()].map((registration) => this.renderFixedAction(registration)),
-      ...[...this.hostToggleActions.values()].map((action) => this.renderHostToggle(action))
+      ...[...this.hostToggleActions.values()].map((action) => this.renderHostToggle(action)),
+      ...[...this.usageLimitActions.values()].map((registration) => this.renderUsageLimit(registration)),
+      ...[...this.usageOverviewActions.values()].map((action) => this.renderUsageOverview(action)),
+      ...[...this.rateLimitResetActions.values()].map((action) => this.renderRateLimitReset(action))
     ]);
   }
 
@@ -289,6 +358,38 @@ export class DeckController {
     const label = this.targetPlatform === "darwin" ? "MAC" : "WIN";
     const theme = this.targetSnapshot()?.theme ?? "dark";
     await this.setImage(action, renderHostTargetKey(label, this.targetHealth().state, theme));
+  }
+
+  private async renderUsageLimit({ action, mode }: UsageLimitRegistration): Promise<void> {
+    const snapshot = this.targetSnapshot();
+    const window = selectUsageWindow(snapshot?.usage, mode);
+    const requestedKind: UsageWindowKind = mode === "auto" ? (window?.kind ?? "other") : mode;
+    await this.setImage(action, renderUsageLimitKey(window, requestedKind, snapshot?.theme ?? "dark", this.targetHealth().state));
+  }
+
+  private async renderUsageOverview(action: KeyAction): Promise<void> {
+    const snapshot = this.targetSnapshot();
+    await this.setImage(action, renderUsageOverviewKey(snapshot?.usage?.windows ?? [], snapshot?.theme ?? "dark", this.targetHealth().state));
+  }
+
+  private async renderRateLimitReset(action: KeyAction): Promise<void> {
+    const snapshot = this.targetSnapshot();
+    const startedAt = this.resetHolds.get(action.id);
+    const progress = startedAt == null ? 0 : Math.min(1, (Date.now() - startedAt) / RESET_HOLD_MS);
+    await this.setImage(action, renderRateLimitResetKey(
+      snapshot?.usage?.resetCreditsAvailable ?? null,
+      progress,
+      snapshot?.theme ?? "dark",
+      this.targetHealth().state,
+      snapshot?.usage?.resetCreditsApplicable ?? null
+    ));
+  }
+
+  private async renderResetHolds(): Promise<void> {
+    await Promise.all([...this.resetHolds.keys()].map(async (id) => {
+      const action = this.rateLimitResetActions.get(id);
+      if (action) await this.renderRateLimitReset(action);
+    }));
   }
 
   private targetHealth(): HostHealth {
@@ -362,7 +463,7 @@ export class DeckController {
     if (this.stopped) return;
     this.animation = setTimeout(async () => {
       this.animationFrame = (this.animationFrame + 1) % 12;
-      try { await this.renderAnimatedAgents(); }
+      try { await Promise.all([this.renderAnimatedAgents(), this.renderResetHolds()]); }
       finally { this.scheduleAnimation(); }
     }, 200);
   }

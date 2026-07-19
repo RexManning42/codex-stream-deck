@@ -53,9 +53,14 @@ The same plugin runs on Windows and macOS. It discovers the local loopback port 
 3. read the native six-slot state, layout, agent source, and lighting preference;
 4. dispatch Micro HID and joystick events;
 5. emulate native encoder-rotation HID events for reasoning-effort changes;
-6. resolve standalone keycap actions from Codex's live Micro keycap registry and current official command runner.
+6. resolve standalone keycap actions from Codex's live Micro keycap registry and current official command runner;
+7. read Codex's renderer-owned `rate-limit-status` query and normalize its current 5-hour, weekly, and reset-credit state.
 
 The bridge does not emulate a USB HID device and installs no driver.
+
+Usage data remains part of the same typed host snapshot, so the circular limit, two-bar overview, and reset-credit key automatically follow the selected Mac/Windows target. Window identity is derived from the duration returned by Codex rather than from primary/secondary ordering. A missing 5-hour window is represented as unavailable, and Automatic mode falls back to weekly.
+
+Reset consumption is the only mutating usage operation. It is a narrow typed relay command and calls Codex's current native reset-credit client only after the Stream Deck key has been held for 1.2 seconds. The bridge verifies both availability and applicability, selects an available plan-supported credit, uses a unique redemption request ID, and then refreshes the renderer query. No credential, raw endpoint access, or arbitrary request surface is exposed to the relay.
 
 ### Optional multi-host relay
 

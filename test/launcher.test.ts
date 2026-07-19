@@ -55,7 +55,12 @@ test("startup monitoring survives Codex updates without duplicate watchers", asy
   assert.match(build, /replace\(\/\\r\\n\/g, "\\n"\)/);
 });
 
-test("watcher recovery decision self-test passes in PowerShell", async () => {
+test("watcher recovery decision self-test passes in PowerShell", async (context) => {
+  if (process.platform !== "win32") {
+    context.skip("Windows PowerShell watcher self-test runs on Windows");
+    return;
+  }
+
   const watcherPath = fileURLToPath(new URL("../launcher/Watch-CodexDeck.ps1", import.meta.url));
   const { stdout } = await execFileAsync("powershell.exe", [
     "-NoLogo", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", watcherPath, "-SelfTest"

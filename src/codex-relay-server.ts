@@ -18,7 +18,7 @@ export type RelayServerConfig = {
 };
 
 type RelayControl = Pick<CodexMicroRendererBridge,
-  "refresh" | "sendAgent" | "sendAction" | "sendJoystick" | "sendEncoder" | "adjustReasoning" | "runKeycap">;
+  "refresh" | "sendAgent" | "sendAction" | "sendJoystick" | "sendEncoder" | "adjustReasoning" | "runKeycap" | "consumeRateLimitReset">;
 
 export class CodexRelayServer {
   private server?: WebSocketServer;
@@ -186,6 +186,7 @@ async function executeRelayCommand(control: RelayControl, command: RelayCommand)
   if (command.kind === "joystick") return control.sendJoystick(command.direction, command.distance);
   if (command.kind === "encoder") return control.sendEncoder(command.act);
   if (command.kind === "reasoning") return control.adjustReasoning(command.direction);
+  if (command.kind === "rate-limit-reset") return control.consumeRateLimitReset();
   return control.runKeycap(command.keycapId as OfficialKeycapId);
 }
 

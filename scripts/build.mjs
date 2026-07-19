@@ -8,6 +8,7 @@ await rm(resolve(output, "bin"), { recursive: true, force: true });
 await rm(resolve(output, "static"), { recursive: true, force: true });
 await mkdir(resolve(output, "bin"), { recursive: true });
 await mkdir(resolve(output, "static/imgs"), { recursive: true });
+await mkdir(resolve(output, "static/property-inspector"), { recursive: true });
 for (const filename of [
   "category-icon.svg", "category-icon@2x.svg",
   "key.svg", "key@2x.svg",
@@ -16,6 +17,7 @@ for (const filename of [
   await cp(resolve("static/imgs", filename), resolve(output, "static/imgs", filename));
 }
 await cp(resolve("static/manifest.json"), resolve(output, "manifest.json"));
+await cp(resolve("static/property-inspector/usage-limit.html"), resolve(output, "static/property-inspector/usage-limit.html"));
 
 await build({
   entryPoints: [resolve("src/plugin.ts")],

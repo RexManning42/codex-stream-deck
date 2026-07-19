@@ -90,17 +90,22 @@ const SNAPSHOT_EXPRESSION = `(async () => {
 
   let queue = [root[reactKey]];
   const seen = new Set();
+  const queryClients = new Set();
   let found = null;
   while (queue.length && seen.size < 30000 && !found) {
     const fiber = queue.pop();
     if (!fiber || seen.has(fiber)) continue;
     seen.add(fiber);
     const maps = [];
-    if (fiber.memoizedProps?.value instanceof Map) maps.push(fiber.memoizedProps.value);
+    const contextValues = [fiber.memoizedProps?.value];
     let dependency = fiber.dependencies?.firstContext;
     while (dependency) {
-      if (dependency.memoizedValue instanceof Map) maps.push(dependency.memoizedValue);
+      contextValues.push(dependency.memoizedValue);
       dependency = dependency.next;
+    }
+    for (const value of contextValues) {
+      if (value instanceof Map) maps.push(value);
+      if (value && typeof value.getQueryCache === 'function' && typeof value.getQueryData === 'function') queryClients.add(value);
     }
     for (const chain of maps) {
       for (const node of chain.values()) {
@@ -190,6 +195,52 @@ const SNAPSHOT_EXPRESSION = `(async () => {
       toEpoch(slot.thread?.updatedAt) ?? toEpoch(slot.task?.updatedAt)
   }));
 
+  let usage;
+  for (const client of queryClients) {
+    try {
+      const query = client.getQueryCache().getAll().find((candidate) =>
+        JSON.stringify(candidate.queryKey) === '["rate-limit-status"]'
+      );
+      const data = query?.state?.data;
+      const rateLimit = data?.rate_limit;
+      if (!rateLimit || typeof rateLimit !== 'object') continue;
+      const normalizeWindow = (window, role) => {
+        if (!window || typeof window !== 'object') return null;
+        const used = Number(window.used_percent);
+        if (!Number.isFinite(used)) return null;
+        const seconds = Number(window.limit_window_seconds);
+        const minutes = Number.isFinite(seconds) && seconds > 0 ? seconds / 60 : null;
+        const kind = minutes != null && Math.abs(minutes - 300) <= 1 ? 'five-hour'
+          : minutes != null && Math.abs(minutes - 10080) <= 1 ? 'weekly'
+            : 'other';
+        const usedPercent = Math.min(100, Math.max(0, used));
+        return {
+          id: kind === 'other' ? role + '-' + String(minutes ?? 'unknown') : kind,
+          kind,
+          usedPercent,
+          remainingPercent: 100 - usedPercent,
+          windowDurationMins: minutes,
+          resetsAt: toEpoch(window.reset_at) ?? null
+        };
+      };
+      const windows = [
+        normalizeWindow(rateLimit.primary_window, 'primary'),
+        normalizeWindow(rateLimit.secondary_window, 'secondary')
+      ].filter(Boolean);
+      const available = Number(data.rate_limit_reset_credits?.available_count);
+      const applicable = Number(data.rate_limit_reset_credits?.applicable_available_count);
+      usage = {
+        windows,
+        observedAt: Number.isFinite(query.state?.dataUpdatedAt) && query.state.dataUpdatedAt > 0
+          ? query.state.dataUpdatedAt
+          : Date.now(),
+        resetCreditsAvailable: Number.isFinite(available) ? Math.max(0, Math.floor(available)) : null,
+        resetCreditsApplicable: Number.isFinite(applicable) ? Math.max(0, Math.floor(applicable)) : null
+      };
+      break;
+    } catch {}
+  }
+
   const html = document.documentElement;
   const body = document.body;
   const themeWords = [
@@ -219,7 +270,7 @@ const SNAPSHOT_EXPRESSION = `(async () => {
     ?? document.querySelector('[data-above-composer-conversation-id]')?.getAttribute('data-above-composer-conversation-id')
     ?? undefined;
 
-  return { slots, activeThreadKey, layout, agentSource, lightingAutoOff, theme };
+  return { slots, activeThreadKey, layout, agentSource, lightingAutoOff, theme, ...(usage ? { usage } : {}) };
 })()`;
 
 export class CodexMicroRendererBridge {
@@ -351,6 +402,78 @@ export class CodexMicroRendererBridge {
     })()`;
     try {
       await this.evaluate(expression);
+    } catch (error) {
+      this.disconnect();
+      throw error;
+    }
+  }
+
+  async consumeRateLimitReset(): Promise<void> {
+    await this.ensureConnected();
+    const redeemRequestId = randomUUID();
+    const expression = `(async () => {
+      const urls = [...new Set([
+        ...[...document.querySelectorAll('link[href], script[src]')].map((element) => element.href || element.src),
+        ...performance.getEntriesByType('resource').map((entry) => entry.name)
+      ])].filter((url) => url.includes('/assets/') && url.endsWith('.js'));
+      let client = null;
+      for (const url of urls) {
+        try {
+          const namespace = await import(url);
+          client = Object.values(namespace).find((candidate) =>
+            candidate && typeof candidate === 'object' &&
+            typeof candidate.safeGet === 'function' && typeof candidate.safePost === 'function'
+          );
+          if (client) break;
+        } catch {}
+      }
+      if (!client) throw new Error('Codex usage client is unavailable.');
+
+      const summary = await client.safeGet('/wham/usage');
+      const applicable = Number(summary?.rate_limit_reset_credits?.applicable_available_count);
+      if (Number.isFinite(applicable) && applicable <= 0) throw new Error('No reset credit is currently applicable.');
+
+      const details = await client.safeGet('/wham/rate-limit-reset-credits');
+      const credit = Array.isArray(details?.credits)
+        ? details.credits.find((candidate) => candidate?.status === 'available' && candidate?.is_supported_by_plan !== false)
+        : null;
+      if (!credit?.id) throw new Error('No available reset credit was found.');
+      const result = await client.safePost('/wham/rate-limit-reset-credits/consume', {
+        requestBody: { credit_id: credit.id, redeem_request_id: ${JSON.stringify(redeemRequestId)} }
+      });
+      if (result?.code !== 'reset' && result?.code !== 'already_redeemed') {
+        throw new Error('Codex rejected the reset credit: ' + String(result?.code ?? 'unknown'));
+      }
+
+      try {
+        const refreshed = await client.safeGet('/wham/usage');
+        const root = document.getElementById('root');
+        const reactKey = root && Object.getOwnPropertyNames(root).find((key) => key.startsWith('__reactContainer$'));
+        const queue = reactKey ? [root[reactKey]] : [];
+        const seen = new Set();
+        while (queue.length && seen.size < 30000) {
+          const fiber = queue.pop();
+          if (!fiber || seen.has(fiber)) continue;
+          seen.add(fiber);
+          const values = [fiber.memoizedProps?.value];
+          let dependency = fiber.dependencies?.firstContext;
+          while (dependency) { values.push(dependency.memoizedValue); dependency = dependency.next; }
+          const queryClient = values.find((value) =>
+            value && typeof value.setQueryData === 'function' && typeof value.invalidateQueries === 'function'
+          );
+          if (queryClient) {
+            queryClient.setQueryData(['rate-limit-status'], refreshed);
+            void queryClient.invalidateQueries({ queryKey: ['rate-limit-reset-credits'] });
+            break;
+          }
+          queue.push(fiber.child, fiber.sibling);
+        }
+      } catch {}
+      return result.code;
+    })()`;
+    try {
+      await this.evaluate(expression);
+      this.lastSnapshot = undefined;
     } catch (error) {
       this.disconnect();
       throw error;

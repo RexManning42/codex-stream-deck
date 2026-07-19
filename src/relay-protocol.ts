@@ -11,6 +11,7 @@ export type RelayCommand =
   | { kind: "joystick"; direction: MicroDirection; distance: 0 | 1 }
   | { kind: "encoder"; act: 0 | 1 }
   | { kind: "reasoning"; direction: ReasoningAdjustment }
+  | { kind: "rate-limit-reset" }
   | { kind: "keycap"; keycapId: OfficialKeycapId };
 
 export type RelayAuthMessage = { type: "auth"; protocol: 1; token: string };
@@ -200,6 +201,7 @@ export function parseRelayCommand(value: unknown): RelayCommand | null {
   if (value.kind === "joystick" && ["up", "right", "down", "left"].includes(String(value.direction)) && binary(value.distance)) return value as RelayCommand;
   if (value.kind === "encoder" && binary(value.act)) return value as RelayCommand;
   if (value.kind === "reasoning" && ["decrease", "increase"].includes(String(value.direction))) return value as RelayCommand;
+  if (value.kind === "rate-limit-reset") return value as RelayCommand;
   if (value.kind === "keycap" && typeof value.keycapId === "string" && OFFICIAL_KEYCAP_IDS.includes(value.keycapId as OfficialKeycapId)) return value as RelayCommand;
   return null;
 }
@@ -208,12 +210,24 @@ function isSnapshot(value: unknown): value is MicroSnapshot {
   if (!isRecord(value) || !Array.isArray(value.slots) || value.slots.length !== 6 || !isRecord(value.layout)) return false;
   if (!value.slots.every((slot, index) => isRecord(slot) && slot.id === index && typeof slot.status === "string")) return false;
   if (value.activeThreadKey != null && !isThreadKey(value.activeThreadKey)) return false;
+  if (value.usage != null && !isUsageSnapshot(value.usage)) return false;
   if (value.hostSessions == null) return true;
   return Array.isArray(value.hostSessions) && value.hostSessions.length <= 128 && value.hostSessions.every((session) =>
     isRecord(session) && isThreadKey(session.threadId) && validTimestamp(session.activityAt) != null &&
     ["idle", "working", "complete"].includes(String(session.status)) &&
     (session.completionRevision == null || integerIn(session.completionRevision, 0, Number.MAX_SAFE_INTEGER))
   );
+}
+
+function isUsageSnapshot(value: unknown): boolean {
+  if (!isRecord(value) || !Array.isArray(value.windows) || value.windows.length > 8 || validTimestamp(value.observedAt) == null) return false;
+  if (value.resetCreditsAvailable != null && !integerIn(value.resetCreditsAvailable, 0, Number.MAX_SAFE_INTEGER)) return false;
+  if (value.resetCreditsApplicable != null && !integerIn(value.resetCreditsApplicable, 0, Number.MAX_SAFE_INTEGER)) return false;
+  return value.windows.every((window) => isRecord(window) && typeof window.id === "string" && window.id.length <= 64 &&
+    ["five-hour", "weekly", "other"].includes(String(window.kind)) &&
+    finitePercent(window.usedPercent) && finitePercent(window.remainingPercent) &&
+    (window.windowDurationMins == null || (typeof window.windowDurationMins === "number" && Number.isFinite(window.windowDurationMins) && window.windowDurationMins > 0)) &&
+    (window.resetsAt == null || validTimestamp(window.resetsAt) != null));
 }
 
 function isHost(value: unknown): value is CodexHost {
@@ -225,6 +239,9 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 function binary(value: unknown): value is 0 | 1 { return value === 0 || value === 1; }
+function finitePercent(value: unknown): boolean {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0 && value <= 100;
+}
 function integerIn(value: unknown, minimum: number, maximum: number): value is number {
   return Number.isInteger(value) && Number(value) >= minimum && Number(value) <= maximum;
 }

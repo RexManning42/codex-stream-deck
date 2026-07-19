@@ -1,6 +1,8 @@
 export type AgentVisualStatus = "empty" | "idle" | "thinking" | "complete" | "input" | "error";
 export type ThemeMode = "light" | "dark";
 export type HostHealthState = "ready" | "degraded" | "offline" | "connecting";
+export type UsageLimitMode = "auto" | "five-hour" | "weekly";
+export type UsageWindowKind = Exclude<UsageLimitMode, "auto"> | "other";
 
 export type HostHealth = {
   state: HostHealthState;
@@ -37,6 +39,22 @@ export type HostSessionPresence = {
   completionRevision?: number;
 };
 
+export type UsageWindow = {
+  id: string;
+  kind: UsageWindowKind;
+  usedPercent: number;
+  remainingPercent: number;
+  windowDurationMins: number | null;
+  resetsAt: number | null;
+};
+
+export type UsageSnapshot = {
+  windows: UsageWindow[];
+  observedAt: number;
+  resetCreditsAvailable: number | null;
+  resetCreditsApplicable: number | null;
+};
+
 export type MicroSnapshot = {
   slots: MicroAgentSlot[];
   /** Task currently open in the Codex renderer, even when it is outside the six native Micro slots. */
@@ -45,6 +63,8 @@ export type MicroSnapshot = {
   agentSource: "pinned" | "recent" | "priority" | "custom";
   lightingAutoOff: string;
   theme: ThemeMode;
+  /** Account usage read from Codex's authenticated renderer client. */
+  usage?: UsageSnapshot;
   /** Recent local rollout identities used to disambiguate cross-host mirrors. */
   hostSessions?: HostSessionPresence[];
 };

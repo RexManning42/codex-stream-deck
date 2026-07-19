@@ -1,7 +1,8 @@
-import streamDeck, { action, type KeyDownEvent, type KeyUpEvent, type WillAppearEvent, type WillDisappearEvent, SingletonAction } from "@elgato/streamdeck";
+import streamDeck, { action, type DidReceiveSettingsEvent, type KeyDownEvent, type KeyUpEvent, type WillAppearEvent, type WillDisappearEvent, SingletonAction } from "@elgato/streamdeck";
 import type { DeckController, FixedIconSource } from "./controller.js";
 import type { OfficialKeycapId } from "./keycaps.js";
 import type { MicroActionSlot, MicroDirection, ReasoningAdjustment } from "./types.js";
+import { parseUsageLimitMode } from "./usage.js";
 
 abstract class AgentAction extends SingletonAction {
   constructor(private readonly controller: DeckController, private readonly slot: number) { super(); }
@@ -277,6 +278,62 @@ export class HostToggle extends SingletonAction {
     try { await this.controller.toggleTargetHost(); }
     catch (error) {
       streamDeck.logger.error(`Host toggle failed: ${String(error)}`);
+      await ev.action.showAlert();
+    }
+  }
+}
+
+@action({ UUID: "com.simeo.codex-deck.usage-limit" })
+export class UsageLimit extends SingletonAction {
+  constructor(private readonly controller: DeckController) { super(); }
+
+  override onWillAppear(ev: WillAppearEvent): void {
+    if (ev.action.isKey()) this.controller.registerUsageLimit(ev.action, parseUsageLimitMode(ev.payload.settings.mode));
+  }
+
+  override onDidReceiveSettings(ev: DidReceiveSettingsEvent): void {
+    if (ev.action.isKey()) this.controller.updateUsageLimitMode(ev.action, parseUsageLimitMode(ev.payload.settings.mode));
+  }
+
+  override onWillDisappear(ev: WillDisappearEvent): void {
+    this.controller.unregisterUsageLimit(ev.action);
+  }
+}
+
+@action({ UUID: "com.simeo.codex-deck.usage-overview" })
+export class UsageOverview extends SingletonAction {
+  constructor(private readonly controller: DeckController) { super(); }
+
+  override onWillAppear(ev: WillAppearEvent): void {
+    if (ev.action.isKey()) this.controller.registerUsageOverview(ev.action);
+  }
+
+  override onWillDisappear(ev: WillDisappearEvent): void {
+    this.controller.unregisterUsageOverview(ev.action);
+  }
+}
+
+@action({ UUID: "com.simeo.codex-deck.rate-limit-reset" })
+export class RateLimitReset extends SingletonAction {
+  constructor(private readonly controller: DeckController) { super(); }
+
+  override onWillAppear(ev: WillAppearEvent): void {
+    if (ev.action.isKey()) this.controller.registerRateLimitReset(ev.action);
+  }
+
+  override onWillDisappear(ev: WillDisappearEvent): void {
+    this.controller.unregisterRateLimitReset(ev.action);
+  }
+
+  override onKeyDown(ev: KeyDownEvent): void {
+    this.controller.beginRateLimitReset(ev.action);
+  }
+
+  override async onKeyUp(ev: KeyUpEvent): Promise<void> {
+    try {
+      if (await this.controller.finishRateLimitReset(ev.action) && ev.action.isKey()) await ev.action.showOk();
+    } catch (error) {
+      streamDeck.logger.error(`Rate-limit reset failed: ${String(error)}`);
       await ev.action.showAlert();
     }
   }

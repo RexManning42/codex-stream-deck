@@ -33,10 +33,14 @@ export type HostSessionPresence = {
   threadId: string;
   activityAt: number;
   status: "idle" | "working" | "complete";
+  /** Byte offset of the latest structural task_complete event; no task content is exposed. */
+  completionRevision?: number;
 };
 
 export type MicroSnapshot = {
   slots: MicroAgentSlot[];
+  /** Task currently open in the Codex renderer, even when it is outside the six native Micro slots. */
+  activeThreadKey?: string;
   layout: MicroLayout;
   agentSource: "pinned" | "recent" | "priority" | "custom";
   lightingAutoOff: string;

@@ -214,8 +214,12 @@ const SNAPSHOT_EXPRESSION = `(async () => {
   const theme = explicitDark || (!explicitLight && (luminance != null ? luminance < 0.42 : matchMedia('(prefers-color-scheme: dark)').matches))
     ? 'dark'
     : 'light';
+  const activeThreadKey = document.querySelector('[data-app-action-sidebar-thread-id][aria-current="page"]')
+    ?.getAttribute('data-app-action-sidebar-thread-id')
+    ?? document.querySelector('[data-above-composer-conversation-id]')?.getAttribute('data-above-composer-conversation-id')
+    ?? undefined;
 
-  return { slots, layout, agentSource, lightingAutoOff, theme };
+  return { slots, activeThreadKey, layout, agentSource, lightingAutoOff, theme };
 })()`;
 
 export class CodexMicroRendererBridge {

@@ -9,7 +9,8 @@ const THREAD_KEY = /(?:^|:)([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9
 export class CodexSessionOwnershipIndex {
   private sessionIds = new Set<string>();
   private recentSessions: HostSessionPresence[] = [];
-  private openedAt = new Map<string, number>();
+  private acknowledgedCompletions = new Map<string, number>();
+  private activeSessions = new Set<string>();
   private refreshedAt = 0;
   private refreshInFlight?: Promise<void>;
 
@@ -20,13 +21,25 @@ export class CodexSessionOwnershipIndex {
 
   async annotate(snapshot: MicroSnapshot, now = Date.now()): Promise<MicroSnapshot> {
     await this.refreshIfNeeded(now);
+    const selectedSessions = new Set(snapshot.slots
+      .filter((slot) => slot.selected)
+      .map((slot) => sessionIdFromThreadKey(slot.threadKey))
+      .filter((sessionId): sessionId is string => sessionId != null));
+    const activeSessionId = sessionIdFromThreadKey(snapshot.activeThreadKey ?? null);
+    if (activeSessionId) selectedSessions.add(activeSessionId);
+    for (const session of this.recentSessions) {
+      if (session.status === "complete" && session.completionRevision != null && selectedSessions.has(session.threadId) &&
+        !this.activeSessions.has(session.threadId)) {
+        this.acknowledgedCompletions.set(session.threadId, session.completionRevision);
+      }
+    }
+    this.activeSessions = selectedSessions;
     return {
       ...snapshot,
       hostSessions: this.recentSessions.map((session) => ({
         ...session,
-        status: session.status === "complete" && (this.openedAt.get(session.threadId) ?? 0) >= session.activityAt
-          ? "idle"
-          : session.status
+        status: session.status === "complete" && session.completionRevision != null &&
+          this.acknowledgedCompletions.get(session.threadId) === session.completionRevision ? "idle" : session.status
       })),
       slots: snapshot.slots.map((slot) => {
         const sessionId = sessionIdFromThreadKey(slot.threadKey);
@@ -35,9 +48,13 @@ export class CodexSessionOwnershipIndex {
     };
   }
 
-  markOpened(threadKey: string, now = Date.now()): void {
+  markOpened(threadKey: string, _now = Date.now()): void {
     const sessionId = sessionIdFromThreadKey(threadKey);
-    if (sessionId) this.openedAt.set(sessionId, now);
+    if (!sessionId) return;
+    const session = this.recentSessions.find((candidate) => candidate.threadId === sessionId);
+    if (session?.status === "complete" && session.completionRevision != null) {
+      this.acknowledgedCompletions.set(sessionId, session.completionRevision);
+    }
   }
 
   private async refreshIfNeeded(now: number): Promise<void> {
@@ -88,13 +105,15 @@ export class CodexSessionOwnershipIndex {
       if (!uniqueRecent.has(file.threadId)) uniqueRecent.set(file.threadId, file);
     }
     const recent = [...uniqueRecent.values()].slice(0, 128);
-    this.recentSessions = await Promise.all(recent.map(async ({ threadId, path, activityAt }) => ({
-      threadId,
-      activityAt,
-      status: now - activityAt <= 15 * 60_000 ? await readRecentSessionStatus(path) : "idle"
-    })));
-    for (const [threadId, openedAt] of this.openedAt) {
-      if (now - openedAt > 86_400_000) this.openedAt.delete(threadId);
+    this.recentSessions = await Promise.all(recent.map(async ({ threadId, path, activityAt }) => {
+      const recentStatus = now - activityAt <= 15 * 60_000
+        ? await readRecentSessionStatus(path)
+        : { status: "idle" as const };
+      return { threadId, activityAt, ...recentStatus };
+    }));
+    const currentIds = new Set(this.recentSessions.map((session) => session.threadId));
+    for (const threadId of this.acknowledgedCompletions.keys()) {
+      if (!currentIds.has(threadId)) this.acknowledgedCompletions.delete(threadId);
     }
     this.refreshedAt = now;
   }
@@ -113,7 +132,7 @@ function defaultSessionRoots(): string[] {
   return [join(codexHome, "sessions"), join(codexHome, "archived_sessions")];
 }
 
-async function readRecentSessionStatus(path: string): Promise<HostSessionPresence["status"]> {
+async function readRecentSessionStatus(path: string): Promise<Pick<HostSessionPresence, "status" | "completionRevision">> {
   try {
     const handle = await open(path, "r");
     try {
@@ -128,13 +147,13 @@ async function readRecentSessionStatus(path: string): Promise<HostSessionPresenc
         tail.lastIndexOf('"type":"function_call"'),
         tail.lastIndexOf('"type":"turn_context"')
       );
-      if (activeAt > completedAt) return "working";
-      if (completedAt >= 0) return "complete";
-      return "idle";
+      if (activeAt > completedAt) return { status: "working" };
+      if (completedAt >= 0) return { status: "complete", completionRevision: info.size - length + completedAt };
+      return { status: "idle" };
     } finally {
       await handle.close();
     }
   } catch {
-    return "idle";
+    return { status: "idle" };
   }
 }

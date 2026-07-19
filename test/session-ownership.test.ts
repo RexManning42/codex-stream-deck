@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { appendFile, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -52,6 +52,51 @@ test("recent local rollout tails expose structural working and completion state 
   }
 });
 
+test("acknowledging a completion survives later file touches but a new completion becomes unread", async () => {
+  const root = await mkdtemp(join(tmpdir(), "codex-deck-completion-ack-"));
+  try {
+    const threadId = "10000000-0000-4000-8000-000000000003";
+    const path = join(root, `rollout-now-${threadId}.jsonl`);
+    await writeFile(path, '{"type":"event_msg","payload":{"type":"task_complete"}}\n');
+    const index = new CodexSessionOwnershipIndex([root], 0);
+    const first = await index.annotate(snapshotFor(threadId, false), Date.now());
+    assert.equal(first.hostSessions?.find((session) => session.threadId === threadId)?.status, "complete");
+
+    const selected = await index.annotate(snapshotFor(threadId, true), Date.now() + 1);
+    assert.equal(selected.hostSessions?.find((session) => session.threadId === threadId)?.status, "idle");
+    await appendFile(path, '{"type":"event_msg","payload":{"type":"thread_opened"}}\n');
+    const afterTouch = await index.annotate(snapshotFor(threadId, false), Date.now() + 2);
+    assert.equal(afterTouch.hostSessions?.find((session) => session.threadId === threadId)?.status, "idle");
+
+    await appendFile(path, '{"type":"event_msg","payload":{"type":"agent_reasoning"}}\n{"type":"event_msg","payload":{"type":"task_complete"}}\n');
+    const nextCompletion = await index.annotate(snapshotFor(threadId, false), Date.now() + 3);
+    assert.equal(nextCompletion.hostSessions?.find((session) => session.threadId === threadId)?.status, "complete");
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("the active renderer task acknowledges completion outside the six Micro slots", async () => {
+  const root = await mkdtemp(join(tmpdir(), "codex-deck-active-thread-"));
+  try {
+    const threadId = "10000000-0000-4000-8000-000000000004";
+    const path = join(root, `rollout-now-${threadId}.jsonl`);
+    await writeFile(path, '{"type":"event_msg","payload":{"type":"agent_reasoning"}}\n');
+    const index = new CodexSessionOwnershipIndex([root], 0);
+    const value = snapshot();
+    value.activeThreadKey = `local:${threadId}`;
+    assert.equal((await index.annotate(value, Date.now())).hostSessions?.find((session) => session.threadId === threadId)?.status, "working");
+    await appendFile(path, '{"type":"event_msg","payload":{"type":"task_complete"}}\n');
+    assert.equal((await index.annotate(value, Date.now() + 1)).hostSessions?.find((session) => session.threadId === threadId)?.status, "complete");
+    delete value.activeThreadKey;
+    await index.annotate(value, Date.now() + 2);
+    value.activeThreadKey = `local:${threadId}`;
+    assert.equal((await index.annotate(value, Date.now() + 3)).hostSessions?.find((session) => session.threadId === threadId)?.status, "idle");
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 function snapshot(): MicroSnapshot {
   return {
     slots: Array.from({ length: 6 }, (_, id) => ({
@@ -73,4 +118,10 @@ function snapshot(): MicroSnapshot {
     lightingAutoOff: "3-minutes",
     theme: "dark"
   };
+}
+
+function snapshotFor(threadId: string, selected: boolean): MicroSnapshot {
+  const value = snapshot();
+  value.slots[0] = { ...value.slots[0]!, threadKey: `local:${threadId}`, selected };
+  return value;
 }

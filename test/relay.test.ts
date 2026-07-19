@@ -52,8 +52,16 @@ test("relay command parser permits only the narrow native command surface", () =
 test("relay snapshot parser bounds and validates host session catalogs", async () => {
   const { parseRelayServerMessage } = await import("../src/relay-protocol.js");
   const valid = { type: "snapshot", protocol: 1, host, observedAt: 1, snapshot: structuredClone(snapshot) };
-  valid.snapshot.hostSessions = [{ threadId: "00000000-0000-4000-8000-000000000000", activityAt: 1, status: "working" }];
+  valid.snapshot.hostSessions = [{ threadId: "00000000-0000-4000-8000-000000000000", activityAt: 1, status: "working", completionRevision: 42 }];
   assert.notEqual(parseRelayServerMessage(valid), null);
+  valid.snapshot.activeThreadKey = "local:00000000-0000-4000-8000-000000000000";
+  assert.notEqual(parseRelayServerMessage(valid), null);
+  valid.snapshot.activeThreadKey = "local:not-a-thread";
+  assert.equal(parseRelayServerMessage(valid), null);
+  delete valid.snapshot.activeThreadKey;
+  const invalidRevision = structuredClone(valid);
+  invalidRevision.snapshot.hostSessions![0]!.completionRevision = -1;
+  assert.equal(parseRelayServerMessage(invalidRevision), null);
   const invalid = structuredClone(valid) as typeof valid & { snapshot: { hostSessions: unknown[] } };
   invalid.snapshot.hostSessions = Array.from({ length: 129 }, () => valid.snapshot.hostSessions![0]!);
   assert.equal(parseRelayServerMessage(invalid), null);
@@ -374,6 +382,42 @@ test("combined priority mode keeps freshly completed owner sessions ahead of idl
   assert.equal(merged[0]!.threadKey, completed);
   assert.equal(merged[0]!.host.platform, "darwin");
   assert.equal(merged[0]!.status, "complete");
+});
+
+test("a completion opened through a cross-host mirror stays idle until a new completion revision", () => {
+  const windows: CodexHost = { hostId: "11111111-1111-4111-8111-111111111111", hostName: "Windows", platform: "win32" };
+  const windowsSnapshot = structuredClone(snapshot);
+  const macSnapshot = structuredClone(snapshot);
+  const completed = "50000000-0000-4000-8000-000000000001";
+  for (const slot of [...windowsSnapshot.slots, ...macSnapshot.slots]) {
+    slot.status = "idle";
+    slot.selected = false;
+    slot.activityAt = 1;
+  }
+  windowsSnapshot.slots[0] = { ...windowsSnapshot.slots[0]!, threadKey: "50000000-0000-4000-8000-000000000099" };
+  windowsSnapshot.activeThreadKey = `local:${completed}`;
+  macSnapshot.slots[0] = { ...macSnapshot.slots[0]!, threadKey: completed, ownedByHost: true };
+  macSnapshot.hostSessions = [{ threadId: completed, activityAt: 1_900, status: "working" }];
+  const index = new HostActivityIndex();
+  const inputs = () => [
+    { host: windows, snapshot: windowsSnapshot, observedAt: 2_000 },
+    { host, snapshot: macSnapshot, observedAt: 2_000 }
+  ];
+
+  assert.equal(index.merge(inputs(), 2_000, windows.hostId).find((slot) => slot.threadKey === completed)?.status, "working");
+  macSnapshot.hostSessions[0] = { threadId: completed, activityAt: 2_000, status: "complete", completionRevision: 10 };
+  assert.equal(index.merge(inputs(), 2_001, windows.hostId).find((slot) => slot.threadKey === completed)?.status, "complete");
+  delete windowsSnapshot.activeThreadKey;
+  index.merge(inputs(), 2_002, windows.hostId);
+  windowsSnapshot.activeThreadKey = `local:${completed}`;
+  assert.equal(index.merge(inputs(), 2_003, windows.hostId).find((slot) => slot.threadKey === completed)?.status, "idle");
+  delete windowsSnapshot.activeThreadKey;
+  assert.equal(index.merge(inputs(), 2_004, windows.hostId).find((slot) => slot.threadKey === completed)?.status, "idle");
+
+  macSnapshot.hostSessions[0]!.completionRevision = 20;
+  assert.equal(index.merge(inputs(), 2_005, windows.hostId).find((slot) => slot.threadKey === completed)?.status, "complete");
+  macSnapshot.slots[0]!.status = "working";
+  assert.equal(index.merge(inputs(), 2_006, windows.hostId).find((slot) => slot.threadKey === completed)?.status, "working");
 });
 
 test("authenticated relay publishes snapshots and dispatches typed commands", async () => {

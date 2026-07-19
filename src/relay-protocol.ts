@@ -41,6 +41,8 @@ type SessionOwner = { input: HostSnapshot; session: HostSessionPresence };
 
 export class HostActivityIndex {
   private readonly activity = new Map<string, ActivityRecord>();
+  private readonly acknowledgedCompletions = new Map<string, number>();
+  private activeThreads = new Set<string>();
 
   merge(inputs: HostSnapshot[], now = Date.now(), authoritativeHostId?: string): RoutedAgentSlot[] {
     const routed: RoutedAgentSlot[] = [];
@@ -77,7 +79,17 @@ export class HostActivityIndex {
       mirrors.set(identity, candidates);
     }
     const sessionOwners = sessionOwnerIndex(inputs);
-    const merged = [...mirrors.entries()].map(([identity, candidates]) => mergeMirrors(candidates, sessionOwners.get(identity)));
+    const activeThreads = new Set([
+      ...inputs
+      .map((input) => input.snapshot.activeThreadKey)
+      .filter((threadKey): threadKey is string => threadKey != null)
+      .map(threadIdentity),
+      ...routed.filter((slot) => slot.selected && slot.threadKey).map((slot) => threadIdentity(slot.threadKey!))
+    ]);
+    const newlyActiveThreads = new Set([...activeThreads].filter((identity) => !this.activeThreads.has(identity)));
+    const merged = [...mirrors.entries()].map(([identity, candidates]) =>
+      mergeMirrors(identity, candidates, sessionOwners.get(identity), this.acknowledgedCompletions, newlyActiveThreads.has(identity)));
+    this.activeThreads = activeThreads;
     const byThread = new Map(merged.map((slot) => [threadIdentity(slot.threadKey!), slot]));
     const authority = inputs.find((input) => input.host.hostId === authoritativeHostId) ?? inputs[0]!;
 
@@ -195,10 +207,12 @@ export function parseRelayCommand(value: unknown): RelayCommand | null {
 function isSnapshot(value: unknown): value is MicroSnapshot {
   if (!isRecord(value) || !Array.isArray(value.slots) || value.slots.length !== 6 || !isRecord(value.layout)) return false;
   if (!value.slots.every((slot, index) => isRecord(slot) && slot.id === index && typeof slot.status === "string")) return false;
+  if (value.activeThreadKey != null && !isThreadKey(value.activeThreadKey)) return false;
   if (value.hostSessions == null) return true;
   return Array.isArray(value.hostSessions) && value.hostSessions.length <= 128 && value.hostSessions.every((session) =>
     isRecord(session) && isThreadKey(session.threadId) && validTimestamp(session.activityAt) != null &&
-    ["idle", "working", "complete"].includes(String(session.status))
+    ["idle", "working", "complete"].includes(String(session.status)) &&
+    (session.completionRevision == null || integerIn(session.completionRevision, 0, Number.MAX_SAFE_INTEGER))
   );
 }
 
@@ -227,7 +241,13 @@ function compareOwnership(left: RoutedAgentSlot, right: RoutedAgentSlot): number
   return compareActivity(left, right);
 }
 
-function mergeMirrors(candidates: RoutedAgentSlot[], sessionOwner?: SessionOwner): RoutedAgentSlot {
+function mergeMirrors(
+  identity: string,
+  candidates: RoutedAgentSlot[],
+  sessionOwner: SessionOwner | undefined,
+  acknowledgedCompletions: Map<string, number>,
+  newlyActiveOnAnyHost: boolean
+): RoutedAgentSlot {
   let owner = candidates[0]!;
   const explicitOwner = sessionOwner && candidates.find((candidate) => candidate.host.hostId === sessionOwner.input.host.hostId);
   if (explicitOwner) owner = explicitOwner;
@@ -243,9 +263,23 @@ function mergeMirrors(candidates: RoutedAgentSlot[], sessionOwner?: SessionOwner
   const ownedCandidates = candidates.filter((candidate) => candidate.ownedByHost === true);
   const recencyCandidates = ownedCandidates.length ? ownedCandidates : candidates;
   const sessionStatus = sessionOwner?.session.status;
-  const status = sessionStatus && sessionStatus !== "idle" && !["approval", "awaiting-approval", "awaiting-response", "unread", "error"].includes(strongest.status)
-    ? sessionStatus
-    : strongest.status;
+  const completionRevision = sessionOwner?.session.completionRevision;
+  const completionKey = sessionOwner ? `${sessionOwner.input.host.hostId}:${identity}` : identity;
+  if (sessionStatus === "complete" && completionRevision != null &&
+    newlyActiveOnAnyHost) {
+    acknowledgedCompletions.set(completionKey, completionRevision);
+  }
+  const completionAcknowledged = sessionStatus === "complete" && completionRevision != null &&
+    acknowledgedCompletions.get(completionKey) === completionRevision;
+  const liveOrAttention = ["working", "thinking", "approval", "awaiting-approval", "awaiting-response", "unread", "error"];
+  const completionLike = ["complete", "completed", "done"];
+  const status = completionAcknowledged && completionLike.includes(strongest.status)
+    ? "idle"
+    : sessionStatus === "complete" && !completionAcknowledged && !liveOrAttention.includes(strongest.status)
+      ? "complete"
+      : sessionStatus === "working" && !liveOrAttention.includes(strongest.status)
+        ? "working"
+        : strongest.status;
   const routedOwner = sessionOwner?.input.host ?? owner.host;
   return {
     ...owner,

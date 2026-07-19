@@ -131,13 +131,15 @@ export class DeckController {
   }
 
   registerUsageLimit(action: KeyAction, mode: UsageLimitMode): void {
-    this.usageLimitActions.set(action.id, { action, mode });
-    void this.renderUsageLimit({ action, mode });
+    const registration = { action, mode };
+    this.usageLimitActions.set(action.id, registration);
+    this.renderUsageAction("Usage limit", action, () => this.renderUsageLimit(registration));
   }
 
   updateUsageLimitMode(action: KeyAction, mode: UsageLimitMode): void {
-    this.usageLimitActions.set(action.id, { action, mode });
-    void this.renderUsageLimit({ action, mode });
+    const registration = { action, mode };
+    this.usageLimitActions.set(action.id, registration);
+    this.renderUsageAction("Usage limit", action, () => this.renderUsageLimit(registration));
   }
 
   unregisterUsageLimit(action: ActionIdentity): void {
@@ -146,7 +148,7 @@ export class DeckController {
 
   registerUsageOverview(action: KeyAction): void {
     this.usageOverviewActions.set(action.id, action);
-    void this.renderUsageOverview(action);
+    this.renderUsageAction("Usage overview", action, () => this.renderUsageOverview(action));
   }
 
   unregisterUsageOverview(action: ActionIdentity): void {
@@ -155,7 +157,7 @@ export class DeckController {
 
   registerRateLimitReset(action: KeyAction): void {
     this.rateLimitResetActions.set(action.id, action);
-    void this.renderRateLimitReset(action);
+    this.renderUsageAction("Rate-limit reset", action, () => this.renderRateLimitReset(action));
   }
 
   unregisterRateLimitReset(action: ActionIdentity): void {
@@ -443,6 +445,12 @@ export class DeckController {
     if (this.lastImages.get(action.id) === image) return;
     await Promise.all([action.setImage(image), action.setTitle("")]);
     this.lastImages.set(action.id, image);
+  }
+
+  private renderUsageAction(label: string, action: KeyAction, render: () => Promise<void>): void {
+    void render()
+      .then(() => streamDeck.logger.info(`${label} action rendered (${action.id}).`))
+      .catch((error) => streamDeck.logger.error(`${label} action render failed (${action.id}): ${String(error)}`));
   }
 
   private unregister<T>(action: ActionIdentity, registrations: Map<string, T>): void {

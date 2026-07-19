@@ -91,6 +91,8 @@ Add **Usage Limit** for the existing circular capacity display. Its Stream Deck 
 
 **Rate Limit Reset** shows the number of credits Codex currently reports. The count remains centered inside the reset arrow and the action is dimmed only when no credit is available. Consuming a credit requires holding the key for 1.2 seconds; a short tap does nothing, and Codex's current applicability check still has to pass. This action uses Codex's current native usage client and is therefore subject to the same undocumented compatibility boundary as the Micro bridge.
 
+Usage and reset credits are account-scoped. In Windows + Mac mode these three keys therefore do not follow the Windows/Mac function-key target: they prefer the healthy local account snapshot and fall back to the paired host only when local usage data is unavailable.
+
 ## Official keycap SVGs are not included
 
 The public source and release intentionally exclude OpenAI's Codex Micro keycap SVG files. The original agent tiles, status marks, glow system, animations, fallback labels, and plugin artwork are included.

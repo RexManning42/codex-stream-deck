@@ -201,6 +201,14 @@ const SNAPSHOT_EXPRESSION = `(async () => {
       const query = client.getQueryCache().getAll().find((candidate) =>
         JSON.stringify(candidate.queryKey) === '["rate-limit-status"]'
       );
+      const refreshKey = Symbol.for('codex-deck-rate-limit-refresh-at');
+      const now = Date.now();
+      const dataUpdatedAt = Number(query?.state?.dataUpdatedAt) || 0;
+      const lastRefreshAttempt = Number(globalThis[refreshKey]) || 0;
+      if (query && typeof query.fetch === 'function' && now - dataUpdatedAt >= 15000 && now - lastRefreshAttempt >= 15000) {
+        globalThis[refreshKey] = now;
+        try { await query.fetch(); } catch {}
+      }
       const data = query?.state?.data;
       const rateLimit = data?.rate_limit;
       if (!rateLimit || typeof rateLimit !== 'object') continue;

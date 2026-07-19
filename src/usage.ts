@@ -1,4 +1,10 @@
-import type { UsageLimitMode, UsageSnapshot, UsageWindow, UsageWindowKind } from "./types.js";
+import type { HostHealth, MicroSnapshot, UsageLimitMode, UsageSnapshot, UsageWindow, UsageWindowKind } from "./types.js";
+
+export type AccountUsageSource = {
+  health: HostHealth;
+  hostId?: string;
+  snapshot?: MicroSnapshot;
+};
 
 export const FIVE_HOUR_MINUTES = 5 * 60;
 export const WEEKLY_MINUTES = 7 * 24 * 60;
@@ -30,4 +36,11 @@ export function usageLabel(kind: UsageWindowKind): string {
 
 export function clampPercent(value: number): number {
   return Math.min(100, Math.max(0, value));
+}
+
+export function selectAccountUsageSource(local: AccountUsageSource, remote?: AccountUsageSource): AccountUsageSource {
+  const candidates = [local, remote].filter((candidate): candidate is AccountUsageSource => candidate != null);
+  return candidates.find((candidate) => candidate.health.state === "ready" && candidate.snapshot?.usage != null)
+    ?? candidates.find((candidate) => candidate.snapshot?.usage != null)
+    ?? local;
 }

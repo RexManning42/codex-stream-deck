@@ -3,8 +3,8 @@ import { readFile } from "node:fs/promises";
 import test from "node:test";
 import { renderRateLimitResetKey, renderUsageLimitKey, renderUsageOverviewKey } from "../src/render.js";
 import { parseRelayCommand } from "../src/relay-protocol.js";
-import type { UsageSnapshot, UsageWindow } from "../src/types.js";
-import { parseUsageLimitMode, selectUsageWindow, usageWindowKind } from "../src/usage.js";
+import type { MicroSnapshot, UsageSnapshot, UsageWindow } from "../src/types.js";
+import { parseUsageLimitMode, selectAccountUsageSource, selectUsageWindow, usageWindowKind } from "../src/usage.js";
 
 const fiveHour: UsageWindow = {
   id: "five-hour", kind: "five-hour", usedPercent: 26, remainingPercent: 74,
@@ -32,6 +32,34 @@ test("usage selection prefers 5-hour but falls back to weekly", () => {
   assert.equal(usageWindowKind(10_080), "weekly");
   assert.equal(parseUsageLimitMode("weekly"), "weekly");
   assert.equal(parseUsageLimitMode("unexpected"), "auto");
+});
+
+test("account usage stays local when the function-key target switches hosts", () => {
+  const localSnapshot = { slots: [], layout: { slots: {} }, agentSource: "priority", lightingAutoOff: false, theme: "dark", usage: usage([weekly]) } as unknown as MicroSnapshot;
+  const remoteSnapshot = { slots: [], layout: { slots: {} }, agentSource: "priority", lightingAutoOff: false, theme: "dark" } as unknown as MicroSnapshot;
+  const source = selectAccountUsageSource(
+    { hostId: "windows", health: { state: "ready", changedAt: 1 }, snapshot: localSnapshot },
+    { hostId: "mac", health: { state: "ready", changedAt: 1 }, snapshot: remoteSnapshot }
+  );
+  assert.equal(source.hostId, "windows");
+  assert.equal(source.snapshot?.usage?.windows[0], weekly);
+});
+
+test("account usage falls back to the remote host only when local usage is unavailable", () => {
+  const localSnapshot = { slots: [], layout: { slots: {} }, agentSource: "priority", lightingAutoOff: false, theme: "dark" } as unknown as MicroSnapshot;
+  const remoteSnapshot = { ...localSnapshot, usage: usage([fiveHour]) } as MicroSnapshot;
+  const source = selectAccountUsageSource(
+    { hostId: "windows", health: { state: "ready", changedAt: 1 }, snapshot: localSnapshot },
+    { hostId: "mac", health: { state: "ready", changedAt: 1 }, snapshot: remoteSnapshot }
+  );
+  assert.equal(source.hostId, "mac");
+});
+
+test("renderer refreshes stale account usage without waiting for application focus", async () => {
+  const bridge = await readFile(new URL("../src/codex-micro-renderer-bridge.ts", import.meta.url), "utf8");
+  assert.match(bridge, /Symbol\.for\('codex-deck-rate-limit-refresh-at'\)/);
+  assert.match(bridge, /now - dataUpdatedAt >= 15000/);
+  assert.match(bridge, /await query\.fetch\(\)/);
 });
 
 test("single usage key preserves the circular design and centers numeric weight", () => {

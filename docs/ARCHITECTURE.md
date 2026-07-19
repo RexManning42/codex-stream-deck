@@ -58,7 +58,7 @@ The same plugin runs on Windows and macOS. It discovers the local loopback port 
 
 The bridge does not emulate a USB HID device and installs no driver.
 
-Usage data remains part of the same typed host snapshot, so the circular limit, two-bar overview, and reset-credit key automatically follow the selected Mac/Windows target. Window identity is derived from the duration returned by Codex rather than from primary/secondary ordering. A missing 5-hour window is represented as unavailable, and Automatic mode falls back to weekly.
+Usage data remains part of the same typed host snapshot, but usage and reset credits are account-scoped and therefore do not follow the Mac/Windows function-key target. The controller prefers a healthy local account snapshot and falls back to the paired host only when local usage is unavailable. Window identity is derived from the duration returned by Codex rather than from primary/secondary ordering. A missing 5-hour window is represented as unavailable, and Automatic mode falls back to weekly. The bridge refreshes a stale renderer-owned usage query at most once every 15 seconds, so background-window values do not depend on Codex receiving focus.
 
 Reset consumption is the only mutating usage operation. It is a narrow typed relay command and calls Codex's current native reset-credit client only after the Stream Deck key has been held for 1.2 seconds. The bridge verifies both availability and applicability, selects an available plan-supported credit, uses a unique redemption request ID, and then refreshes the renderer query. No credential, raw endpoint access, or arbitrary request surface is exposed to the relay.
 

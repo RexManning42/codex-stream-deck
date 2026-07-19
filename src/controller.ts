@@ -18,7 +18,7 @@ import type {
   CodexHost, HostHealth, MicroActionSlot, MicroDirection, MicroSnapshot, ReasoningAdjustment,
   RoutedAgentSlot, UsageLimitMode, UsageWindowKind
 } from "./types.js";
-import { selectUsageWindow } from "./usage.js";
+import { selectAccountUsageSource, selectUsageWindow, type AccountUsageSource } from "./usage.js";
 
 export type FixedIconSource =
   | { kind: "local"; keycapId: string }
@@ -177,10 +177,11 @@ export class DeckController {
     const registered = this.rateLimitResetActions.get(action.id);
     if (registered) await this.renderRateLimitReset(registered);
     if (startedAt == null || Date.now() - startedAt < RESET_HOLD_MS) return false;
-    const usage = this.targetSnapshot()?.usage;
+    const source = this.accountUsageSource();
+    const usage = source.snapshot?.usage;
     if ((usage?.resetCreditsAvailable ?? 0) <= 0) throw new Error("No rate-limit reset credit is available.");
     if (usage?.resetCreditsApplicable === 0) throw new Error("No rate-limit reset credit is currently applicable.");
-    await this.sendToTarget({ kind: "rate-limit-reset" }, () => this.microBridge.consumeRateLimitReset());
+    await this.sendToHost(source.hostId, { kind: "rate-limit-reset" }, () => this.microBridge.consumeRateLimitReset());
     await this.refresh();
     return true;
   }
@@ -363,26 +364,28 @@ export class DeckController {
   }
 
   private async renderUsageLimit({ action, mode }: UsageLimitRegistration): Promise<void> {
-    const snapshot = this.targetSnapshot();
+    const source = this.accountUsageSource();
+    const snapshot = source.snapshot;
     const window = selectUsageWindow(snapshot?.usage, mode);
     const requestedKind: UsageWindowKind = mode === "auto" ? (window?.kind ?? "other") : mode;
-    await this.setImage(action, renderUsageLimitKey(window, requestedKind, snapshot?.theme ?? "dark", this.targetHealth().state));
+    await this.setImage(action, renderUsageLimitKey(window, requestedKind, snapshot?.theme ?? "dark", source.health.state));
   }
 
   private async renderUsageOverview(action: KeyAction): Promise<void> {
-    const snapshot = this.targetSnapshot();
-    await this.setImage(action, renderUsageOverviewKey(snapshot?.usage?.windows ?? [], snapshot?.theme ?? "dark", this.targetHealth().state));
+    const source = this.accountUsageSource();
+    await this.setImage(action, renderUsageOverviewKey(source.snapshot?.usage?.windows ?? [], source.snapshot?.theme ?? "dark", source.health.state));
   }
 
   private async renderRateLimitReset(action: KeyAction): Promise<void> {
-    const snapshot = this.targetSnapshot();
+    const source = this.accountUsageSource();
+    const snapshot = source.snapshot;
     const startedAt = this.resetHolds.get(action.id);
     const progress = startedAt == null ? 0 : Math.min(1, (Date.now() - startedAt) / RESET_HOLD_MS);
     await this.setImage(action, renderRateLimitResetKey(
       snapshot?.usage?.resetCreditsAvailable ?? null,
       progress,
       snapshot?.theme ?? "dark",
-      this.targetHealth().state
+      source.health.state
     ));
   }
 
@@ -408,6 +411,21 @@ export class DeckController {
     const remote = this.relayClient?.currentSnapshot();
     if (this.localHost && this.targetPlatform !== this.localHost.platform) return remote?.snapshot;
     return this.localSnapshot?.snapshot;
+  }
+
+  private accountUsageSource(): AccountUsageSource {
+    const local: AccountUsageSource = {
+      health: this.localHealth,
+      hostId: this.localHost?.hostId,
+      snapshot: this.localSnapshot?.snapshot
+    };
+    const remoteSnapshot = this.relayClient?.currentSnapshot();
+    const remote: AccountUsageSource | undefined = remoteSnapshot ? {
+      health: this.relayClient?.currentHealth() ?? { state: "offline", reason: "relay-disconnected", changedAt: Date.now() },
+      hostId: remoteSnapshot.host.hostId,
+      snapshot: remoteSnapshot.snapshot
+    } : undefined;
+    return selectAccountUsageSource(local, remote);
   }
 
   private isRemoteTarget(): boolean {

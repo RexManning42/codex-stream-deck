@@ -45,9 +45,9 @@ const DEVICE_STATE = {
   state: { status: "connected", error: null, battery: { percentage: 100, isCharging: true } }
 };
 
-export const REASONING_COMMANDS: Record<ReasoningAdjustment, string> = {
-  decrease: "composer.decreaseReasoningEffort",
-  increase: "composer.increaseReasoningEffort"
+export const REASONING_ENCODER_KEYS: Record<ReasoningAdjustment, "ENC_CW" | "ENC_CC"> = {
+  decrease: "ENC_CW",
+  increase: "ENC_CC"
 };
 
 const SNAPSHOT_EXPRESSION = `(async () => {
@@ -271,27 +271,9 @@ export class CodexMicroRendererBridge {
   }
 
   async adjustReasoning(direction: ReasoningAdjustment): Promise<void> {
-    await this.ensureConnected();
-    const command = REASONING_COMMANDS[direction];
-    const expression = `(async () => {
-      const urls = [
-        ...[...document.querySelectorAll('link[href], script[src]')].map((element) => element.href || element.src),
-        ...performance.getEntriesByType('resource').map((entry) => entry.name)
-      ];
-      const href = [...new Set(urls)].find((value) => value.includes('/assets/run-command-'));
-      if (!href) throw new Error('Codex command runner is unavailable.');
-      const commands = await import(href);
-      if (typeof commands.i !== 'function') throw new Error('Codex command runner export changed.');
-      const handled = commands.i(${JSON.stringify(command)}, 'codex_micro_hid');
-      if (!handled) throw new Error('Codex reasoning command is not active in the current composer.');
-      return true;
-    })()`;
-    try {
-      await this.evaluate(expression);
-    } catch (error) {
-      this.disconnect();
-      throw error;
-    }
+    await this.dispatch("codex-micro-hid-event", {
+      event: { key: REASONING_ENCODER_KEYS[direction], act: 2, slot: null, threadKey: null }
+    }, "codex-micro-hid-event");
   }
 
   async runKeycap(keycapId: OfficialKeycapId): Promise<void> {
@@ -305,9 +287,10 @@ export class CodexMicroRendererBridge {
       const moduleUrl = (prefix) => urls.find((value) => value.includes('/assets/' + prefix));
       const layoutUrl = moduleUrl('codex-micro-layout-');
       const commandsUrl = moduleUrl('run-command-');
+      const bridgeUrl = moduleUrl('codex-micro-bridge-');
       const vscodeUrl = moduleUrl('vscode-api-');
-      if (!layoutUrl || !commandsUrl || !vscodeUrl) throw new Error('Codex Micro command modules are unavailable.');
-      const [layout, commands, vscode] = await Promise.all([import(layoutUrl), import(commandsUrl), import(vscodeUrl)]);
+      if (!layoutUrl) throw new Error('Codex Micro keycap registry is unavailable.');
+      const layout = await import(layoutUrl);
       const keycapGetter = Object.values(layout).find((candidate) => {
         if (typeof candidate !== 'function') return false;
         try { return candidate('FAST')?.id === 'FAST'; } catch { return false; }
@@ -318,12 +301,38 @@ export class CodexMicroRendererBridge {
       if (!action) throw new Error('The selected Codex Micro keycap has no action.');
 
       if (action.type === 'command') {
-        if (typeof commands.i !== 'function') throw new Error('Codex command runner export changed.');
-        const handled = commands.i(action.command, 'codex_micro_hid');
+        let commandRunner = null;
+        if (commandsUrl) {
+          const commands = await import(commandsUrl);
+          if (typeof commands.i === 'function') commandRunner = commands.i;
+        }
+        if (!commandRunner && bridgeUrl) {
+          const bridgeSource = await (await fetch(bridgeUrl)).text();
+          const runnerMatch = bridgeSource.match(/([A-Za-z_$][\\w$]*)\\(\\s*[A-Za-z_$][\\w$]*\\??\\.command\\s*,["'\\x60]codex_micro_hid["'\\x60]\\)/);
+          const runnerLocal = runnerMatch?.[1];
+          const importPattern = /import\\s*\\{([^}]*)\\}\\s*from\\s*["']([^"']+)["']/g;
+          let importMatch;
+          while (runnerLocal && (importMatch = importPattern.exec(bridgeSource))) {
+            for (const specifier of importMatch[1].split(',')) {
+              const parts = specifier.trim().split(/\\s+as\\s+/);
+              const exportName = parts[0];
+              const localName = parts[1] ?? parts[0];
+              if (localName !== runnerLocal) continue;
+              const namespace = await import(new URL(importMatch[2], bridgeUrl).href);
+              if (typeof namespace[exportName] === 'function') commandRunner = namespace[exportName];
+              break;
+            }
+            if (commandRunner) break;
+          }
+        }
+        if (typeof commandRunner !== 'function') throw new Error('Codex command runner is unavailable.');
+        const handled = commandRunner(action.command, 'codex_micro_hid');
         if (!handled) throw new Error('This Codex command is not active in the current view.');
         return true;
       }
 
+      if (!vscodeUrl) throw new Error('Codex VS Code event module is unavailable for this keycap.');
+      const vscode = await import(vscodeUrl);
       const bus = [vscode.g, vscode.m, ...Object.values(vscode)].find((candidate) => candidate && typeof candidate === 'object' && (typeof candidate.dispatchHostMessage === 'function' || typeof candidate.dispatchMessage === 'function'));
       if (!bus) throw new Error('Codex VS Code event bus was not found.');
       if (action.type === 'external-url' && typeof bus.dispatchMessage === 'function') {

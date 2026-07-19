@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
-import { renderAgentSvg, renderBuiltinKeycap, renderFallbackKeycap, renderImportedKeycap, SIGNAL_COLORS } from "../src/render.js";
+import { renderAgentSvg, renderBuiltinKeycap, renderFallbackKeycap, renderHostTargetKey, renderImportedKeycap, SIGNAL_COLORS } from "../src/render.js";
 
 test("dark agent tiles use Codex-like charcoal surfaces without pure black", () => {
   const svg = renderAgentSvg(0, "Building dark mode", "thinking", true, 4, "dark");
@@ -56,6 +56,19 @@ test("missing local assets receive a readable themed fallback", () => {
   assert.match(output, /data-icon-source="fallback-label"/);
   assert.match(output, />TERM<\/text>/);
   assert.doesNotMatch(output, /#000(?:000)?\b/i);
+});
+
+test("host target and affected agent keys expose degraded and offline state", () => {
+  const target = decodeURIComponent(renderHostTargetKey("MAC", "degraded", "dark").replace(/^data:image\/svg\+xml;charset=utf8,/, ""));
+  assert.match(target, /data-host-health="degraded"/);
+  assert.match(target, />DEGRADED<\/text>/);
+  assert.match(target, new RegExp(SIGNAL_COLORS.dark.input, "i"));
+
+  const degradedAgent = renderAgentSvg(0, "Last known task", "idle", false, 0, "dark", "M", "degraded");
+  assert.match(degradedAgent, /data-agent-host="M"/);
+  assert.match(degradedAgent, /data-agent-host-health="degraded"/);
+  const offlineAgent = renderAgentSvg(0, "Last known task", "idle", false, 0, "dark", "M", "offline");
+  assert.match(offlineAgent, /data-agent-host-health="offline"/);
 });
 
 function contrast(foreground: string, background: string): number {

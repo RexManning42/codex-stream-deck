@@ -52,8 +52,8 @@ The same plugin runs on Windows and macOS. It discovers the local loopback port 
 2. announce a connected Micro device state;
 3. read the native six-slot state, layout, agent source, and lighting preference;
 4. dispatch Micro HID and joystick events;
-5. invoke the internal reasoning-effort commands;
-6. resolve standalone keycap actions from Codex's live Micro keycap registry.
+5. emulate native encoder-rotation HID events for reasoning-effort changes;
+6. resolve standalone keycap actions from Codex's live Micro keycap registry and current official command runner.
 
 The bridge does not emulate a USB HID device and installs no driver.
 
@@ -81,6 +81,15 @@ An authenticated client may remain connected while the Mac app or its native
 Micro signals are unavailable. Snapshot failures are caught and rate-limited;
 they do not terminate the relay server or watcher. Normal snapshots resume
 automatically when the local bridge becomes ready.
+
+The relay emits an authenticated, typed `degraded` health event when its native
+snapshot source fails. The client also treats a snapshot as stale from its own
+receipt time, so clock differences between computers cannot hide a failure.
+Transport loss is a separate `offline` state. The controller preserves the
+last-known host snapshot to keep the six-key layout stable, overlays the health
+state on affected agent tiles, and uses the Windows/Mac target key as the
+host-wide health surface. Preserved data is display-only: command dispatch still
+requires a live authenticated connection.
 
 ### Rendering
 

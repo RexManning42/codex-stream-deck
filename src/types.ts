@@ -1,5 +1,12 @@
 export type AgentVisualStatus = "empty" | "idle" | "thinking" | "complete" | "input" | "error";
 export type ThemeMode = "light" | "dark";
+export type HostHealthState = "ready" | "degraded" | "offline" | "connecting";
+
+export type HostHealth = {
+  state: HostHealthState;
+  reason?: "awaiting-snapshot" | "native-signals-unavailable" | "snapshot-stale" | "relay-disconnected" | "local-bridge-unavailable";
+  changedAt: number;
+};
 
 export type MicroAgentSlot = {
   id: number;

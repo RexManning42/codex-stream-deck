@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
-import { REASONING_COMMANDS, retainEvaluationPromise, selectCodexMainTarget } from "../src/codex-micro-renderer-bridge.js";
+import { REASONING_ENCODER_KEYS, retainEvaluationPromise, selectCodexMainTarget } from "../src/codex-micro-renderer-bridge.js";
 import { ADDITIONAL_KEYCAPS, OFFICIAL_KEYCAP_IDS } from "../src/keycaps.js";
 import { visualStatusFromMicro } from "../src/status.js";
 
@@ -70,14 +70,14 @@ test("renderer evaluations retain their awaited promise until CDP has collected 
   assert.match(namespaced, /codex-deck-bridge-a-1/);
 });
 
-test("reasoning controls use the official native composer commands", async () => {
-  assert.deepEqual(REASONING_COMMANDS, {
-    decrease: "composer.decreaseReasoningEffort",
-    increase: "composer.increaseReasoningEffort"
+test("reasoning controls use the official native encoder rotation events", async () => {
+  assert.deepEqual(REASONING_ENCODER_KEYS, {
+    decrease: "ENC_CW",
+    increase: "ENC_CC"
   });
   const source = await readFile(new URL("../src/codex-micro-renderer-bridge.ts", import.meta.url), "utf8");
-  assert.match(source, /run-command-/);
-  assert.match(source, /codex_micro_hid/);
+  assert.match(source, /act: 2/);
+  assert.match(source, /codex-micro-hid-event/);
 });
 
 test("manifest exposes both dedicated reasoning adjustment buttons", async () => {
@@ -104,6 +104,10 @@ test("standalone keycaps resolve Codex's live registry instead of hardcoding com
   const source = await readFile(new URL("../src/codex-micro-renderer-bridge.ts", import.meta.url), "utf8");
   assert.match(source, /codex-micro-layout-/);
   assert.match(source, /keycapGetter/);
+  assert.match(source, /codex-micro-bridge-/);
+  assert.match(source, /runnerLocal/);
+  assert.match(source, /\\\\w/);
+  assert.match(source, /import\\\\s/);
   assert.match(source, /codex_micro_hid/);
 });
 

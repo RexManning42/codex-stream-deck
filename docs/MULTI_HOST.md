@@ -64,9 +64,19 @@ Enter the token in the hidden prompt. The relay accepts loopback, Tailscale IPv4
 
 - The six agent keys form one mode-aware Windows+Mac list controlled by the normal Codex Micro agent-source setting.
 - Each visible tile receives a small `W` or `M` badge and routes to its owning desktop.
-- Add **Windows / Mac Target** to page 2. It switches action slots, joystick, encoder, reasoning, standalone keycaps, and New Task between computers.
+- Add **Windows / Mac Target + Health** to page 2. It switches action slots, joystick, encoder, reasoning, standalone keycaps, and New Task between computers while showing the selected host as `READY`, `DEGRADED`, `CONNECT`, or `OFFLINE`.
 - Agent keys ignore the selected target because each task already knows its owner.
 - The selected target survives plugin and relay restarts. If Mac is selected while offline, the key visibly fails instead of silently executing on Windows.
+
+### Host-health behavior
+
+- `READY` means fresh native Codex Micro snapshots are arriving.
+- `DEGRADED` means the transport can still be connected, but native renderer signals are unavailable, the first snapshot has not arrived, or the last snapshot is stale. This is the important undocumented-internals failure: connectivity alone is not treated as proof that task state is live.
+- `OFFLINE` means the relay transport is disconnected. `CONNECT` is the short reconnecting state.
+- Last-known agent tasks stay in their existing slots during degraded or offline periods so a temporary host failure cannot silently reorder the deck. A warning is drawn on every affected tile: orange for uncertain native signals and red for an offline host.
+- Commands never fall through to the other computer. A command aimed at an offline host fails visibly and safely.
+
+Host health deliberately shares the target key instead of consuming one of the six task keys. The target key is the host-wide status surface; agent-tile warnings identify which last-known tasks are affected.
 
 ### Agent-source modes
 

@@ -78,6 +78,15 @@ Restart Stream Deck. Elgato notes that plugins can fail to appear when the Strea
 - Restart only the Stream Deck plugin/app after configuration. Do not restart Codex.
 - Run `Configure-CodexDeckRelay.ps1 -Disable` to return cleanly to Windows-only mode.
 
+## Target key says DEGRADED
+
+`DEGRADED` is different from `OFFLINE`: the relay may still be authenticated, but Codex Deck cannot currently prove that the host's native Micro state is fresh. This can happen while Codex is starting, after an app update changes undocumented renderer internals, or when native signals stop while the process remains connected.
+
+- Orange warnings on agent tiles mean their task and status are last-known, not confirmed live.
+- Wait briefly for startup recovery, then inspect the affected host's watcher logs if the state remains degraded.
+- Do not trust a stale `working`, `done`, or approval color until the host returns to `READY`.
+- A red warning and `OFFLINE` indicate transport loss instead; use the relay checks above.
+
 ## What to include in a bug report
 
 - Codex app version and platform (`Get-AppxPackage OpenAI.Codex | Select-Object Version` on Windows; bundle version on macOS).

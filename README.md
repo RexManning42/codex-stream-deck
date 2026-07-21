@@ -57,10 +57,14 @@ Other Stream Deck models may work, but the included layout and physical-device t
 4. In **Codex Settings > Codex Micro**, choose the agent source, action assignments, joystick actions, and encoder behavior.
 5. Build the two Stream Deck pages below.
 
-The iPhone companion is currently source-only and installed with Xcode. It has
-no CocoaPods or third-party Swift package dependencies. Nearby pairing works on
-the same private Wi-Fi without Tailscale; add Tailscale when you want private
-control away from home. See the [beginner installation guide](docs/IOS_INSTALL.md).
+The iPhone companion is currently source-only: **a Mac with Xcode is required
+to build, sign, and install it**, even when the phone will control only a
+Windows Codex node. There is no App Store, TestFlight, or pre-signed IPA build
+yet. After installation, the Mac does not need to stay online unless it is one
+of the computers being controlled. Nearby pairing works on the same private
+Wi-Fi without Tailscale; add Tailscale for private control away from home. See
+the [beginner installation guide](docs/IOS_INSTALL.md) and the
+[local Wi-Fi test](docs/IOS_LOCAL_WIFI.md).
 
 In Windows + Mac mode, choose the same agent-source mode in both Codex apps when you want both native Pinned lists or both sets of Individual assignments to contribute. Pinned tasks are interleaved fairly. For Individual assignments, the Stream Deck computer wins when both apps assign different tasks to one button, while the other computer fills empty slots. Mirrored copies of the same task are shown only once. See [Multi-host behavior](docs/MULTI_HOST.md#agent-source-modes).
 
@@ -148,7 +152,7 @@ Do not use the launcher while running untrusted local software. See [SECURITY.md
 The current build was locally validated against:
 
 - Codex for Windows `26.715.8383.0`
-- Codex for macOS `26.715.61943`
+- Codex for macOS `26.715.70719` (`5650`)
 - Stream Deck `7.4.2.22730`
 - Windows `10.0.26220.0`
 - Node.js `24.13.0`
@@ -175,6 +179,14 @@ npm run audit:release
 `npm run release:prepare` creates a versioned local release-candidate directory with the plugin package, Windows launcher ZIP, and SHA-256 checksums. The macOS ZIP must be created on macOS with `scripts/package-macos-release.sh` so executable bits survive; pass that ZIP to `scripts/prepare-release.ps1 -MacArchivePath ...`.
 
 Nothing is published automatically. See [CONTRIBUTING.md](CONTRIBUTING.md).
+
+## Acknowledgements
+
+The idea to explore a phone-native Codex Micro companion was inspired in part
+by the public mobile concept shared by [Shikhar (@xikhar)](https://x.com/xikhar).
+Codex Deck Mobile is an independent implementation built on this project's own
+authenticated bridge, native controls, and visual system; no source code or
+artwork from that concept is included.
 
 ## License and trademarks
 

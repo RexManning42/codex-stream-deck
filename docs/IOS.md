@@ -195,6 +195,9 @@ the same Wi-Fi and add the Tailscale profile when the phone must work away from
 home. The project does not ship a hosted relay: reliable internet traversal
 would require an operated authentication, TURN/push, and abuse-control service.
 
+For a short setup that explicitly proves Tailscale is not carrying the
+connection, use the [Nearby local-Wi-Fi test](IOS_LOCAL_WIFI.md).
+
 ### Mac node
 
 The macOS watcher already contains the required node server. If the existing Windows+Mac relay uses an SSH tunnel, keep its loopback listener and token:

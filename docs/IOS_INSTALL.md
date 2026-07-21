@@ -5,6 +5,13 @@ Store. You build and sign your own copy with Xcode. The repository has no
 CocoaPods or third-party Swift package dependencies, and the iPhone build does
 not require Node.js or npm.
 
+> [!IMPORTANT]
+> A Mac is currently required to build, sign, and install the iPhone app because
+> Xcode runs on macOS. This is also true when the phone will control only a
+> Windows Codex computer. Once the app is installed, that Mac does not need to
+> remain online unless it is itself a Codex Deck node. There is no App Store,
+> TestFlight, or pre-signed IPA distribution in this release.
+
 ## What you need
 
 - A Mac with a current Xcode release that includes the iOS 26 SDK.
@@ -20,6 +27,19 @@ personal use, but its provisioning expires after seven days and some
 capabilities can depend on the account and provisioning profile. If automatic
 signing rejects the App Group or widget extension, check the troubleshooting
 section below.
+
+## Download the source
+
+For a released build, either download **Source code (zip)** from that GitHub
+release and extract it, or clone the matching tag in Terminal:
+
+```zsh
+git clone --branch v0.7.0 --depth 1 https://github.com/dazer1234/codex-stream-deck.git
+cd codex-stream-deck
+```
+
+Do not download an unrelated launcher ZIP for the Xcode project. The iPhone
+source lives in the repository's `ios` directory.
 
 ## 1. Create your local signing configuration
 
@@ -96,6 +116,8 @@ For control away from home, install Tailscale on the phone and computer and
 follow [Configure remote access with Tailscale](IOS.md#configure-remote-access-with-tailscale).
 Tailscale is optional for same-Wi-Fi use and remains the recommended initial
 remote-access path; Codex Deck does not expose Chrome DevTools or a public relay.
+To prove the phone is using ordinary Wi-Fi rather than Tailscale, follow the
+[local-only connection test](IOS_LOCAL_WIFI.md).
 
 ## Widgets and background updates
 

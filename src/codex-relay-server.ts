@@ -47,11 +47,18 @@ export class CodexRelayServer {
 
   constructor(
     private readonly config: RelayServerConfig,
-    private readonly host: CodexHost,
+    private host: CodexHost,
     private readonly control: RelayControl,
     private readonly log: (message: string) => void
   ) {
     validateRelayServerConfig(config);
+  }
+
+  updateHost(host: CodexHost): void {
+    if (host.hostId !== this.host.hostId || host.platform !== this.host.platform) {
+      throw new Error("Relay host identity cannot change while the server is running.");
+    }
+    this.host = host;
   }
 
   async start(): Promise<void> {

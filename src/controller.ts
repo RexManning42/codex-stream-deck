@@ -333,7 +333,9 @@ export class DeckController {
   private async refreshOnce(): Promise<void> {
     try {
       const snapshot = await this.microBridge.refresh();
-      if (!this.localHost) this.localHost = await getOrCreateHostIdentity();
+      this.localHost = await getOrCreateHostIdentity();
+      this.mobileRelayServer?.updateHost(this.localHost);
+      this.localMobileRelayServer?.updateHost(this.localHost);
       this.localSnapshot = { host: this.localHost, snapshot, observedAt: Date.now() };
       this.localHealth = { state: "ready", changedAt: Date.now() };
       this.lastError = "";

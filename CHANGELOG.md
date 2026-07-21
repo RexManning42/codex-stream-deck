@@ -9,8 +9,10 @@
 - Added portable local iOS signing configuration; personal team, bundle, App Group, relay tokens, and official OpenAI keycap artwork remain outside public artifacts.
 - Fixed empty iPhone agent keys drawing two misaligned plus symbols.
 - Fixed completed, selected, and mirrored tasks retaining stale working/unread colors across Mac and Windows while preserving fresh approval and active-work signals.
-- Updated renderer discovery and active-task detection for Codex macOS `26.715.61943` and Windows `26.715.8383.0` without hardcoding renderer hashes.
+- Fixed long-running iPhone relays retaining stale Codex version metadata after an app update; host identity remains stable and no Codex restart is required.
+- Updated renderer discovery and active-task detection for Codex macOS `26.715.70719` and Windows `26.715.8383.0` without hardcoding renderer hashes.
 - Added physical-iPhone Swift tests, macOS launcher/watcher self-tests, release privacy audits, and expanded relay, renderer, usage, and project regression coverage.
+- Added beginner installation, same-Wi-Fi verification, and release documentation plus explicit inspiration credit for the mobile companion concept.
 
 ## 0.6.3 - 2026-07-19
 

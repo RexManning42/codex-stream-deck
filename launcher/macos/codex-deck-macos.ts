@@ -444,6 +444,11 @@ async function runWatcher(): Promise<number> {
           }
           relaySignature = nextRelaySignature;
         }
+        const relayHost = {
+          ...await hostState(), platform: "darwin" as const, codexVersion: installation.version
+        };
+        relayServer?.updateHost(relayHost);
+        mobileLocalRelayServer?.updateHost(relayHost);
 
         if (port != null) {
           const signature = `${main!.generation}:${port}`;

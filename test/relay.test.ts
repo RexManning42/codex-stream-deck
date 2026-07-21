@@ -667,6 +667,37 @@ test("authenticated relay publishes snapshots and dispatches typed commands", as
   await server.close();
 });
 
+test("running relay publishes refreshed Codex metadata without changing host identity", async () => {
+  const port = await freePort();
+  const control = {
+    refresh: async () => snapshot,
+    sendAgent: async () => {}, sendAction: async () => {}, sendJoystick: async () => {},
+    sendEncoder: async () => {}, adjustReasoning: async () => {}, runKeycap: async () => {}, consumeRateLimitReset: async () => {}
+  };
+  const server = new CodexRelayServer(
+    { enabled: true, listenHost: "127.0.0.1", port, token: "t".repeat(32) },
+    { ...host, codexVersion: "old" }, control, () => {}
+  );
+  await server.start();
+  server.updateHost({ ...host, hostName: "Renamed Mac", codexVersion: "new" });
+  assert.throws(
+    () => server.updateHost({ ...host, hostId: "56fd97ad-7073-42cc-85ce-befa17546d7d" }),
+    /identity cannot change/
+  );
+  const socket = new WebSocket(`ws://127.0.0.1:${port}`);
+  const messages = messageQueue(socket);
+  await onceOpen(socket);
+  socket.send(JSON.stringify({ type: "auth", protocol: RELAY_PROTOCOL_VERSION, token: "t".repeat(32) }));
+  const ready = await messages.next();
+  const readyHost = ready.host as CodexHost;
+  assert.equal(readyHost.hostName, "Renamed Mac");
+  assert.equal(readyHost.codexVersion, "new");
+  const published = await messages.next();
+  assert.equal((published.host as CodexHost).codexVersion, "new");
+  socket.close();
+  await server.close();
+});
+
 test("relay rejects a client with the wrong token before publishing state", async () => {
   const port = await freePort();
   let refreshes = 0;

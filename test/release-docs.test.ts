@@ -16,7 +16,7 @@ test("iPhone source-install docs state the current Mac and distribution boundary
     assert.match(prose, /control only\s+(?:a\s+)?Windows/i);
     assert.match(prose, /App Store/);
   }
-  assert.match(install, /git clone --branch v0\.7\.0 --depth 1/);
+  assert.match(install, /git clone --branch v0\.7\.0\.1 --depth 1/);
 });
 
 test("release docs preserve inspiration credit and independent implementation wording", async () => {
@@ -38,4 +38,11 @@ test("local Wi-Fi guide proves Nearby works with Tailscale off and keeps CDP pri
   assert.match(guide, /Keep Wi-Fi enabled/i);
   assert.match(guide, /Chrome DevTools/);
   assert.doesNotMatch(guide, /0\.0\.0\.0/);
+});
+
+test("release checksums use portable LF line endings on Windows", async () => {
+  const source = await text("scripts/prepare-release.ps1");
+  assert.match(source, /\$checksums -join "`n"/);
+  assert.match(source, /WriteAllText/);
+  assert.doesNotMatch(source, /WriteAllLines/);
 });

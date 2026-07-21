@@ -1,4 +1,7 @@
-param([string]$MacArchivePath)
+param(
+  [string]$MacArchivePath,
+  [string]$ReleaseVersion
+)
 
 $ErrorActionPreference = 'Stop'
 
@@ -14,7 +17,10 @@ function Get-Sha256Hex([string]$Path) {
 
 $root = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
 $package = Get-Content -LiteralPath (Join-Path $root 'package.json') -Raw | ConvertFrom-Json
-$version = [string]$package.version
+$version = if ([string]::IsNullOrWhiteSpace($ReleaseVersion)) { [string]$package.version } else { $ReleaseVersion.Trim() }
+if ($version -notmatch '^\d+\.\d+\.\d+(?:\.\d+)?(?:-[0-9A-Za-z.-]+)?$') {
+  throw "Invalid release version: $version"
+}
 $output = Join-Path $root "outputs\release-v$version"
 
 Push-Location $root
@@ -42,7 +48,8 @@ try {
   }
   $artifacts = Get-ChildItem -LiteralPath $output -File | Sort-Object Name
   $checksums = @($artifacts | ForEach-Object { "{0}  {1}" -f (Get-Sha256Hex $_.FullName), $_.Name })
-  [IO.File]::WriteAllLines((Join-Path $output 'SHA256SUMS.txt'), $checksums, [Text.UTF8Encoding]::new($false))
+  $checksumText = ($checksums -join "`n") + "`n"
+  [IO.File]::WriteAllText((Join-Path $output 'SHA256SUMS.txt'), $checksumText, [Text.UTF8Encoding]::new($false))
   Write-Host "Release candidate prepared at: $output"
 } finally {
   Pop-Location

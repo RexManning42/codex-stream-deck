@@ -9,10 +9,15 @@ import {
   KeycapFast, KeycapMerge, KeycapNewTask, KeycapOpenAiDocs, KeycapOpenFolder, KeycapPin, KeycapPlay,
   KeycapPullRequest, KeycapReasoningDown, KeycapReasoningUp, KeycapReject, KeycapSettings,
   KeycapSideChat, KeycapSkills, KeycapSplit, KeycapTasks, KeycapTerminal,
-  Plan, Reasoning, ReasoningDown, ReasoningUp, Send, Sidebar
+  Plan, RateLimitReset, Reasoning, ReasoningDown, ReasoningUp, Send, Sidebar,
+  UsageLimit, UsageOverview
 } from "./actions.js";
 
 const controller = new DeckController();
+
+streamDeck.settings.onDidReceiveGlobalSettings<{ showContextRings?: boolean }>((event) => {
+  controller.setContextRingVisibility(event.settings.showContextRings !== false);
+});
 
 for (const pluginAction of [
   new Agent1(controller), new Agent2(controller), new Agent3(controller),
@@ -21,6 +26,7 @@ for (const pluginAction of [
   new Fork(controller), new Dictation(controller), new Send(controller),
   new Plan(controller), new Reasoning(controller), new ReasoningDown(controller), new ReasoningUp(controller), new NewTask(controller),
   new HostToggle(controller),
+  new UsageLimit(controller), new UsageOverview(controller), new RateLimitReset(controller),
   new Back(controller), new Forward(controller), new Sidebar(controller),
   new KeycapFast(controller), new KeycapApprove(controller), new KeycapReject(controller),
   new KeycapSplit(controller), new KeycapNewTask(controller), new KeycapReasoningUp(controller),

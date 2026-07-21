@@ -52,6 +52,96 @@ test("recent local rollout tails expose structural working and completion state 
   }
 });
 
+test("current response_item records keep a long-running Codex task working after task_started leaves the tail", async () => {
+  const root = await mkdtemp(join(tmpdir(), "codex-deck-current-presence-"));
+  try {
+    const threadId = "10000000-0000-4000-8000-000000000009";
+    const path = join(root, `rollout-now-${threadId}.jsonl`);
+    await writeFile(path,
+      '{"type":"event_msg","payload":{"type":"task_started"}}\n' +
+      `${"x".repeat(520 * 1024)}\n` +
+      '{"timestamp":"2026-07-21T20:00:00.000Z","type":"response_item","payload":{"type":"reasoning"}}\n' +
+      '{"timestamp":"2026-07-21T20:00:01.000Z","type":"response_item","payload":{"type":"custom_tool_call","name":"exec"}}\n');
+    const now = Date.parse("2026-07-21T20:00:02.000Z");
+    const annotated = await new CodexSessionOwnershipIndex([root], 0).annotate(
+      snapshotFor(threadId, false), now);
+    const session = annotated.hostSessions?.find((candidate) => candidate.threadId === threadId);
+    assert.equal(session?.status, "working");
+    assert.equal(session?.activityAt, Date.parse("2026-07-21T20:00:01.000Z"));
+    assert.equal(annotated.slots[0]!.status, "working");
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("an old completion uses its event timestamp and cannot flash as newly complete after a file touch", async () => {
+  const root = await mkdtemp(join(tmpdir(), "codex-deck-stale-completion-"));
+  try {
+    const threadId = "10000000-0000-4000-8000-000000000010";
+    await writeFile(join(root, `rollout-now-${threadId}.jsonl`),
+      '{"timestamp":"2026-07-21T19:00:00.000Z","type":"event_msg","payload":{"type":"task_started"}}\n' +
+      '{"timestamp":"2026-07-21T19:01:00.000Z","type":"event_msg","payload":{"type":"task_complete"}}\n' +
+      '{"timestamp":"2026-07-21T20:00:00.000Z","type":"event_msg","payload":{"type":"thread_settings_applied"}}\n');
+    const now = Date.parse("2026-07-21T20:00:01.000Z");
+    const annotated = await new CodexSessionOwnershipIndex([root], 0).annotate(
+      snapshotFor(threadId, false), now);
+    const session = annotated.hostSessions?.find((candidate) => candidate.threadId === threadId);
+    assert.equal(session?.status, "idle");
+    assert.equal(session?.activityAt, Date.parse("2026-07-21T19:01:00.000Z"));
+    assert.equal(annotated.slots[0]!.status, "idle");
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("rollout token counts expose bounded per-thread context usage without task content", async () => {
+  const root = await mkdtemp(join(tmpdir(), "codex-deck-context-"));
+  try {
+    const threadId = "10000000-0000-4000-8000-000000000006";
+    const tokenCount = JSON.stringify({
+      type: "event_msg",
+      payload: {
+        type: "token_count",
+        info: {
+          total_token_usage: { total_tokens: 99_999_999 },
+          last_token_usage: { total_tokens: 80_000 },
+          model_context_window: 100_000
+        }
+      }
+    });
+    await writeFile(join(root, `rollout-now-${threadId}.jsonl`), `${tokenCount}\n`);
+    const value = snapshotFor(threadId, false);
+    const annotated = await new CodexSessionOwnershipIndex([root], 60_000).annotate(value);
+    assert.equal(annotated.slots[0]!.contextUsedPercent, 80);
+    assert.equal(
+      annotated.hostSessions?.find((session) => session.threadId === threadId)?.contextUsedPercent,
+      80);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("a renderer turn_context after task_complete does not resurrect a finished task", async () => {
+  const root = await mkdtemp(join(tmpdir(), "codex-deck-lifecycle-"));
+  try {
+    const threadId = "10000000-0000-4000-8000-000000000007";
+    const path = join(root, `rollout-now-${threadId}.jsonl`);
+    await writeFile(path,
+      '{"type":"event_msg","payload":{"type":"task_started"}}\n' +
+      '{"type":"event_msg","payload":{"type":"task_complete"}}\n' +
+      '{"type":"turn_context","payload":{"type":"turn_context"}}\n');
+    const index = new CodexSessionOwnershipIndex([root], 0);
+    let state = await index.annotate(snapshotFor(threadId, false), Date.now());
+    assert.equal(state.hostSessions?.find((session) => session.threadId === threadId)?.status, "complete");
+
+    await appendFile(path, '{"type":"event_msg","payload":{"type":"task_started"}}\n');
+    state = await index.annotate(snapshotFor(threadId, false), Date.now() + 1);
+    assert.equal(state.hostSessions?.find((session) => session.threadId === threadId)?.status, "working");
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("acknowledging a completion survives later file touches but a new completion becomes unread", async () => {
   const root = await mkdtemp(join(tmpdir(), "codex-deck-completion-ack-"));
   try {
@@ -87,11 +177,28 @@ test("the active renderer task acknowledges completion outside the six Micro slo
     value.activeThreadKey = `local:${threadId}`;
     assert.equal((await index.annotate(value, Date.now())).hostSessions?.find((session) => session.threadId === threadId)?.status, "working");
     await appendFile(path, '{"type":"event_msg","payload":{"type":"task_complete"}}\n');
-    assert.equal((await index.annotate(value, Date.now() + 1)).hostSessions?.find((session) => session.threadId === threadId)?.status, "complete");
-    delete value.activeThreadKey;
-    await index.annotate(value, Date.now() + 2);
+    assert.equal((await index.annotate(value, Date.now() + 1)).hostSessions?.find((session) => session.threadId === threadId)?.status, "idle");
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("owned rollout lifecycle clears stale native working and unread colors", async () => {
+  const root = await mkdtemp(join(tmpdir(), "codex-deck-native-status-"));
+  try {
+    const threadId = "10000000-0000-4000-8000-000000000008";
+    const path = join(root, `rollout-now-${threadId}.jsonl`);
+    await writeFile(path, '{"type":"event_msg","payload":{"type":"task_complete"}}\n');
+    const index = new CodexSessionOwnershipIndex([root], 0);
+    const value = snapshotFor(threadId, false);
+    value.slots[0]!.status = "working";
+    assert.equal((await index.annotate(value, Date.now())).slots[0]!.status, "complete");
+
     value.activeThreadKey = `local:${threadId}`;
-    assert.equal((await index.annotate(value, Date.now() + 3)).hostSessions?.find((session) => session.threadId === threadId)?.status, "idle");
+    value.slots[0]!.status = "unread";
+    const active = await index.annotate(value, Date.now() + 1);
+    assert.equal(active.hostSessions?.find((session) => session.threadId === threadId)?.status, "idle");
+    assert.equal(active.slots[0]!.status, "idle");
   } finally {
     await rm(root, { recursive: true, force: true });
   }

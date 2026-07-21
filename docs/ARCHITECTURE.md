@@ -53,9 +53,14 @@ The same plugin runs on Windows and macOS. It discovers the local loopback port 
 3. read the native six-slot state, layout, agent source, and lighting preference;
 4. dispatch Micro HID and joystick events;
 5. emulate native encoder-rotation HID events for reasoning-effort changes;
-6. resolve standalone keycap actions from Codex's live Micro keycap registry and current official command runner.
+6. resolve standalone keycap actions from Codex's live Micro keycap registry and current official command runner;
+7. read Codex's renderer-owned `rate-limit-status` query and normalize its current 5-hour, weekly, and reset-credit state.
 
 The bridge does not emulate a USB HID device and installs no driver.
+
+Usage data remains part of the same typed host snapshot, but usage and reset credits are account-scoped and therefore do not follow the Mac/Windows function-key target. The controller prefers a healthy local account snapshot and falls back to the paired host only when local usage is unavailable. Window identity is derived from the duration returned by Codex rather than from primary/secondary ordering. A missing 5-hour window is represented as unavailable, and Automatic mode falls back to weekly. The bridge refreshes a stale renderer-owned usage query at most once every 15 seconds, so background-window values do not depend on Codex receiving focus.
+
+Reset consumption is the only mutating usage operation. It is a narrow typed relay command and calls Codex's current native reset-credit client only after the Stream Deck key has been held for 1.2 seconds. The bridge verifies both availability and applicability, selects an available plan-supported credit, uses a unique redemption request ID, and then refreshes the renderer query. No credential, raw endpoint access, or arbitrary request surface is exposed to the relay.
 
 ### Optional multi-host relay
 
@@ -68,14 +73,38 @@ target the host selected by the Windows/Mac toggle.
 Host ownership is resolved from exact local rollout filenames, not from a
 renderer's mirrored recent list. This distinguishes a task's owning desktop
 from a stale cloud or remote-SSH mirror. A bounded rollout tail is searched only
-for structural activity/completion event tags; prompts, responses, project
-names, and other content are neither parsed nor relayed. The relay never reads
-or proxies the remote CLI app-server stream.
+for structural activity/completion event tags and the latest numeric
+`token_count` record. The latter provides optional context-window percentage
+metadata for the small agent-key ring. Prompts, responses, project names, and
+other content are neither parsed nor relayed. The relay never reads or proxies
+the remote CLI app-server stream.
 
 The relay protocol has no arbitrary-evaluation, filesystem, shell, or raw-CDP
 operation. Payloads are capped at 64 KiB, authentication is required before a
 snapshot or command is accepted, and command results use request IDs with
 bounded timeouts.
+
+### Optional iPhone transports
+
+The iPhone consumes the same authenticated protocol through two independent
+transport profiles. Remote mode keeps the relay on loopback and uses private
+Tailscale Serve TLS. Nearby mode binds only the typed relay to one discovered
+RFC 1918 address; Chrome DevTools remains on `127.0.0.1`. Nearby creates a
+per-host P-256 certificate and random token, pins the certificate fingerprint
+in the iPhone profile, and stores the token in Keychain.
+
+Bonjour `_codexdeck._tcp` announces protocol version, stable `hostId`, display
+name, platform, private address, relay port, and certificate fingerprint. It
+never announces the token. The QR deep link carries the initial private
+endpoint, token, and fingerprint. Later Bonjour address changes are accepted
+only for the already-paired `hostId` with the same pinned fingerprint. Config
+and QR files are written atomically with user-only permissions and are excluded
+by the release-state audit.
+
+The nearby and Tailscale listeners are separate, so enabling local discovery
+does not replace or weaken remote access. No public relay is bundled: a
+reliable internet alternative would require operated identity, TURN/push, rate
+limiting, and abuse controls rather than exposing a desktop listener.
 
 An authenticated client may remain connected while the Mac app or its native
 Micro signals are unavailable. Snapshot failures are caught and rate-limited;
@@ -103,6 +132,12 @@ Agent keys are original deterministic SVGs generated in memory from task title a
 | `unread` | green completion |
 | `approval` | orange pause/input |
 | `error` | red error |
+
+When Codex exposes token usage for a task, an optional top-left ring shows the
+latest context-window percentage. Orange begins at 80% and red at 92%. Select
+any Agent key in Stream Deck's property inspector to show or hide this ring
+globally for all six agent keys on that computer. The setting is independent on
+Windows and macOS and does not stop context metadata from syncing.
 
 The renderer derives the active Codex appearance from explicit theme tokens when available and falls back to the computed renderer surface luminance. Dark mode uses layered charcoal surfaces rather than pure black, with off-white text and slightly lifted status colors for the Stream Deck display.
 

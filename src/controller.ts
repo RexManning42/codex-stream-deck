@@ -4,14 +4,22 @@ import { join } from "node:path";
 import { codexDeckStateRoot } from "./codex-deck-paths.js";
 import { isRemoteControlRequest, readControlTarget, writeControlTarget, type HostPlatform as ControlTarget } from "./control-target.js";
 import { CodexRelayClient, readRelayClientConfig } from "./codex-relay-client.js";
+import { CodexRelayServer, readRelayServerConfig } from "./codex-relay-server.js";
 import { CodexMicroRendererBridge } from "./codex-micro-renderer-bridge.js";
 import { getOrCreateHostIdentity } from "./host-identity.js";
 import type { OfficialKeycapId } from "./keycaps.js";
 import { HostActivityIndex, type HostSnapshot, type RelayCommand } from "./relay-protocol.js";
-import { renderAgentKey, renderBuiltinKeycap, renderFallbackKeycap, renderHostTargetKey, renderImportedKeycap, type BuiltinIconName } from "./render.js";
+import {
+  renderAgentKey, renderBuiltinKeycap, renderFallbackKeycap, renderHostTargetKey, renderImportedKeycap,
+  renderRateLimitResetKey, renderUsageLimitKey, renderUsageOverviewKey, type BuiltinIconName
+} from "./render.js";
 import { openCodexThread } from "./codex-open.js";
 import { visualStatusFromMicro } from "./status.js";
-import type { CodexHost, HostHealth, MicroActionSlot, MicroDirection, MicroSnapshot, ReasoningAdjustment, RoutedAgentSlot } from "./types.js";
+import type {
+  CodexHost, HostHealth, MicroActionSlot, MicroDirection, MicroSnapshot, ReasoningAdjustment,
+  RoutedAgentSlot, UsageLimitMode, UsageWindowKind
+} from "./types.js";
+import { selectAccountUsageSource, selectUsageWindow, type AccountUsageSource } from "./usage.js";
 
 export type FixedIconSource =
   | { kind: "local"; keycapId: string }
@@ -20,9 +28,13 @@ export type FixedIconSource =
 type FixedIconRegistration = { action: KeyAction; source: FixedIconSource };
 type AgentRegistration = { action: KeyAction; slot: number };
 type MicroActionRegistration = { action: KeyAction; slot: MicroActionSlot };
+type UsageLimitRegistration = { action: KeyAction; mode: UsageLimitMode };
 type ActionIdentity = { id: string };
+type ContextRingSettings = { showContextRings?: boolean };
 
 const USER_ICON_ROOT = join(codexDeckStateRoot(), "icons");
+const LOCAL_MOBILE_CONFIG = "mobile-local-relay-server.json";
+const RESET_HOLD_MS = 1_200;
 
 export class DeckController {
   private readonly microBridge = new CodexMicroRendererBridge((message) => streamDeck.logger.info(message));
@@ -32,10 +44,16 @@ export class DeckController {
   private readonly keycapImages = new Map<string, Promise<string | null>>();
   private readonly lastImages = new Map<string, string>();
   private readonly hostToggleActions = new Map<string, KeyAction>();
+  private readonly usageLimitActions = new Map<string, UsageLimitRegistration>();
+  private readonly usageOverviewActions = new Map<string, KeyAction>();
+  private readonly rateLimitResetActions = new Map<string, KeyAction>();
+  private readonly resetHolds = new Map<string, number>();
   private readonly activityIndex = new HostActivityIndex();
   private readonly pressedAgents = new Map<number, RoutedAgentSlot>();
   private readonly pressedControlTargets = new Map<string, string>();
   private relayClient?: CodexRelayClient;
+  private mobileRelayServer?: CodexRelayServer;
+  private localMobileRelayServer?: CodexRelayServer;
   private localHost?: CodexHost;
   private localSnapshot?: HostSnapshot;
   private routedSlots: RoutedAgentSlot[] = [];
@@ -44,6 +62,7 @@ export class DeckController {
   private localHealth: HostHealth = { state: "connecting", reason: "awaiting-snapshot", changedAt: Date.now() };
   private poll?: NodeJS.Timeout;
   private animation?: NodeJS.Timeout;
+  private refreshInFlight?: Promise<void>;
   private stopped = false;
   private animationFrame = 0;
   private lastError = "";
@@ -52,9 +71,16 @@ export class DeckController {
   private lastLayoutSignature = "";
   private lastAgentSourceSignature = "";
   private lastHostHealthSignature = "";
+  private showContextRings = true;
 
   async start(): Promise<void> {
     this.stopped = false;
+    try {
+      const settings = await streamDeck.settings.getGlobalSettings<ContextRingSettings>();
+      this.showContextRings = settings.showContextRings !== false;
+    } catch (error) {
+      streamDeck.logger.warn(`Context-ring settings were unavailable; using enabled by default: ${String(error)}`);
+    }
     this.localHost = await getOrCreateHostIdentity();
     this.targetPlatform = await readControlTarget(undefined, this.localHost.platform);
     if (this.targetPlatform === this.localHost.platform) this.targetHostId = this.localHost.hostId;
@@ -62,10 +88,70 @@ export class DeckController {
     if (relayConfig) {
       this.relayClient = new CodexRelayClient(
         relayConfig,
-        () => {},
+        () => { void this.refreshDisplay(); },
         (message) => streamDeck.logger.info(message)
       );
       this.relayClient.start();
+    }
+    try {
+      const [mobileRelayConfig, localMobileRelayConfig] = await Promise.all([
+        readRelayServerConfig(join(codexDeckStateRoot(), "mobile-relay-server.json")),
+        readRelayServerConfig(join(codexDeckStateRoot(), LOCAL_MOBILE_CONFIG))
+      ]);
+      if (mobileRelayConfig || localMobileRelayConfig) {
+        let mobileSnapshotDirty = false;
+        const runAndInvalidate = async (operation: () => Promise<void>): Promise<void> => {
+          await operation();
+          // The relay server publishes a fresh snapshot after acknowledging the
+          // command. Do not make the command result wait for a second full
+          // controller refresh: a renderer refresh can take several seconds
+          // and remote clients intentionally use a short command timeout.
+          mobileSnapshotDirty = true;
+        };
+        const mobileControl = {
+          refresh: async () => {
+            if (!mobileSnapshotDirty && this.localHealth.state === "ready" && this.localSnapshot && Date.now() - this.localSnapshot.observedAt < 1_800) {
+              return this.localSnapshot.snapshot;
+            }
+            await this.refresh();
+            if (this.localHealth.state !== "ready" || !this.localSnapshot) {
+              throw new Error("Codex Micro snapshot is temporarily unavailable.");
+            }
+            mobileSnapshotDirty = false;
+            return this.localSnapshot.snapshot;
+          },
+          sendAgent: (slot: number, act: 0 | 1, threadKey?: string) => runAndInvalidate(
+            () => this.microBridge.sendAgent(slot, act, threadKey)),
+          sendAction: (slot: MicroActionSlot, act: 0 | 1) => runAndInvalidate(
+            () => this.microBridge.sendAction(slot, act)),
+          sendJoystick: (direction: MicroDirection, distance: 0 | 1) => runAndInvalidate(
+            () => this.microBridge.sendJoystick(direction, distance)),
+          sendEncoder: (act: 0 | 1) => runAndInvalidate(() => this.microBridge.sendEncoder(act)),
+          adjustReasoning: (direction: ReasoningAdjustment) => runAndInvalidate(
+            () => this.microBridge.adjustReasoning(direction)),
+          runKeycap: (keycapId: OfficialKeycapId) => runAndInvalidate(
+            () => this.microBridge.runKeycap(keycapId)),
+          consumeRateLimitReset: () => runAndInvalidate(() => this.microBridge.consumeRateLimitReset())
+        };
+        if (mobileRelayConfig) {
+          this.mobileRelayServer = new CodexRelayServer(
+            mobileRelayConfig, this.localHost, mobileControl,
+            (message) => streamDeck.logger.info(`Mobile relay: ${message}`)
+          );
+          await this.mobileRelayServer.start();
+        }
+        if (localMobileRelayConfig) {
+          this.localMobileRelayServer = new CodexRelayServer(
+            localMobileRelayConfig, this.localHost, mobileControl,
+            (message) => streamDeck.logger.info(`Nearby mobile relay: ${message}`)
+          );
+          await this.localMobileRelayServer.start();
+        }
+      }
+    } catch (error) {
+      this.mobileRelayServer = undefined;
+      this.localMobileRelayServer = undefined;
+      streamDeck.logger.error(`Optional mobile relay was not started: ${String(error)}`);
     }
     await this.refresh();
     this.scheduleRefresh();
@@ -77,6 +163,8 @@ export class DeckController {
     if (this.poll) clearInterval(this.poll);
     if (this.animation) clearInterval(this.animation);
     this.relayClient?.close();
+    void this.mobileRelayServer?.close();
+    void this.localMobileRelayServer?.close();
     this.microBridge.close();
   }
 
@@ -87,6 +175,12 @@ export class DeckController {
 
   unregisterAgent(action: ActionIdentity): void {
     this.unregister(action, this.agents);
+  }
+
+  setContextRingVisibility(visible: boolean): void {
+    if (this.showContextRings === visible) return;
+    this.showContextRings = visible;
+    void Promise.all([...this.agents.values()].map((registration) => this.renderAgent(registration)));
   }
 
   registerMicroAction(slot: MicroActionSlot, action: KeyAction): void {
@@ -117,6 +211,62 @@ export class DeckController {
     this.lastImages.delete(action.id);
   }
 
+  registerUsageLimit(action: KeyAction, mode: UsageLimitMode): void {
+    const registration = { action, mode };
+    this.usageLimitActions.set(action.id, registration);
+    this.renderUsageAction("Usage limit", action, () => this.renderUsageLimit(registration));
+  }
+
+  updateUsageLimitMode(action: KeyAction, mode: UsageLimitMode): void {
+    const registration = { action, mode };
+    this.usageLimitActions.set(action.id, registration);
+    this.renderUsageAction("Usage limit", action, () => this.renderUsageLimit(registration));
+  }
+
+  unregisterUsageLimit(action: ActionIdentity): void {
+    this.unregister(action, this.usageLimitActions);
+  }
+
+  registerUsageOverview(action: KeyAction): void {
+    this.usageOverviewActions.set(action.id, action);
+    this.renderUsageAction("Usage overview", action, () => this.renderUsageOverview(action));
+  }
+
+  unregisterUsageOverview(action: ActionIdentity): void {
+    this.unregister(action, this.usageOverviewActions);
+  }
+
+  registerRateLimitReset(action: KeyAction): void {
+    this.rateLimitResetActions.set(action.id, action);
+    this.renderUsageAction("Rate-limit reset", action, () => this.renderRateLimitReset(action));
+  }
+
+  unregisterRateLimitReset(action: ActionIdentity): void {
+    this.resetHolds.delete(action.id);
+    this.unregister(action, this.rateLimitResetActions);
+  }
+
+  beginRateLimitReset(action: ActionIdentity): void {
+    this.resetHolds.set(action.id, Date.now());
+    const registered = this.rateLimitResetActions.get(action.id);
+    if (registered) void this.renderRateLimitReset(registered);
+  }
+
+  async finishRateLimitReset(action: ActionIdentity): Promise<boolean> {
+    const startedAt = this.resetHolds.get(action.id);
+    this.resetHolds.delete(action.id);
+    const registered = this.rateLimitResetActions.get(action.id);
+    if (registered) await this.renderRateLimitReset(registered);
+    if (startedAt == null || Date.now() - startedAt < RESET_HOLD_MS) return false;
+    const source = this.accountUsageSource();
+    const usage = source.snapshot?.usage;
+    if ((usage?.resetCreditsAvailable ?? 0) <= 0) throw new Error("No rate-limit reset credit is available.");
+    if (usage?.resetCreditsApplicable === 0) throw new Error("No rate-limit reset credit is currently applicable.");
+    await this.sendToHost(source.hostId, { kind: "rate-limit-reset" }, () => this.microBridge.consumeRateLimitReset());
+    await this.refresh();
+    return true;
+  }
+
   async toggleTargetHost(): Promise<void> {
     const remote = this.relayClient?.currentHost();
     if (!this.localHost) throw new Error("The local Codex host is not ready.");
@@ -138,8 +288,10 @@ export class DeckController {
     if (act === 1) this.pressedAgents.set(slot, assignment);
     else this.pressedAgents.delete(slot);
     if (!assignment.threadKey) throw new Error("The selected Codex task has no stable thread identity.");
-    if (assignment.host.hostId === this.localHost?.hostId) await this.microBridge.sendAgent(assignment.sourceSlot, act, assignment.threadKey);
-    else await this.sendRemote({ kind: "agent", slot: assignment.sourceSlot, threadKey: assignment.threadKey, act });
+    if (assignment.host.hostId === this.localHost?.hostId) {
+      await this.microBridge.sendAgent(assignment.sourceSlot, act, assignment.threadKey);
+    } else await this.sendRemote({ kind: "agent", slot: assignment.sourceSlot, threadKey: assignment.threadKey, act });
+    if (act === 0) void this.refresh();
   }
 
   async sendMicroAction(slot: MicroActionSlot, act: 0 | 1): Promise<void> {
@@ -171,9 +323,19 @@ export class DeckController {
   }
 
   private async refresh(): Promise<void> {
+    if (this.refreshInFlight) return this.refreshInFlight;
+    const pending = this.refreshOnce();
+    this.refreshInFlight = pending;
+    try { await pending; }
+    finally { if (this.refreshInFlight === pending) this.refreshInFlight = undefined; }
+  }
+
+  private async refreshOnce(): Promise<void> {
     try {
       const snapshot = await this.microBridge.refresh();
-      if (!this.localHost) this.localHost = await getOrCreateHostIdentity();
+      this.localHost = await getOrCreateHostIdentity();
+      this.mobileRelayServer?.updateHost(this.localHost);
+      this.localMobileRelayServer?.updateHost(this.localHost);
       this.localSnapshot = { host: this.localHost, snapshot, observedAt: Date.now() };
       this.localHealth = { state: "ready", changedAt: Date.now() };
       this.lastError = "";
@@ -240,7 +402,10 @@ export class DeckController {
       ...[...this.agents.values()].map((registration) => this.renderAgent(registration)),
       ...[...this.microActions.values()].map((registration) => this.renderMicroAction(registration)),
       ...[...this.fixedActions.values()].map((registration) => this.renderFixedAction(registration)),
-      ...[...this.hostToggleActions.values()].map((action) => this.renderHostToggle(action))
+      ...[...this.hostToggleActions.values()].map((action) => this.renderHostToggle(action)),
+      ...[...this.usageLimitActions.values()].map((registration) => this.renderUsageLimit(registration)),
+      ...[...this.usageOverviewActions.values()].map((action) => this.renderUsageOverview(action)),
+      ...[...this.rateLimitResetActions.values()].map((action) => this.renderRateLimitReset(action))
     ]);
   }
 
@@ -254,7 +419,9 @@ export class DeckController {
     const status = agent ? visualStatusFromMicro(agent.status) : "empty";
     const theme = this.targetSnapshot()?.theme ?? this.localSnapshot?.snapshot.theme ?? "dark";
     const hostBadge = agent && this.relayClient ? (agent.host.platform === "darwin" ? "M" : "W") : undefined;
-    await this.setImage(action, renderAgentKey(slot, title, status, agent?.selected ?? false, this.animationFrame, theme, hostBadge, health.state));
+    await this.setImage(action, renderAgentKey(
+      slot, title, status, agent?.selected ?? false, this.animationFrame, theme, hostBadge,
+      health.state, agent?.contextUsedPercent, this.showContextRings));
   }
 
   private async renderAnimatedAgents(): Promise<void> {
@@ -291,6 +458,39 @@ export class DeckController {
     await this.setImage(action, renderHostTargetKey(label, this.targetHealth().state, theme));
   }
 
+  private async renderUsageLimit({ action, mode }: UsageLimitRegistration): Promise<void> {
+    const source = this.accountUsageSource();
+    const snapshot = source.snapshot;
+    const window = selectUsageWindow(snapshot?.usage, mode);
+    const requestedKind: UsageWindowKind = mode === "auto" ? (window?.kind ?? "other") : mode;
+    await this.setImage(action, renderUsageLimitKey(window, requestedKind, snapshot?.theme ?? "dark", source.health.state));
+  }
+
+  private async renderUsageOverview(action: KeyAction): Promise<void> {
+    const source = this.accountUsageSource();
+    await this.setImage(action, renderUsageOverviewKey(source.snapshot?.usage?.windows ?? [], source.snapshot?.theme ?? "dark", source.health.state));
+  }
+
+  private async renderRateLimitReset(action: KeyAction): Promise<void> {
+    const source = this.accountUsageSource();
+    const snapshot = source.snapshot;
+    const startedAt = this.resetHolds.get(action.id);
+    const progress = startedAt == null ? 0 : Math.min(1, (Date.now() - startedAt) / RESET_HOLD_MS);
+    await this.setImage(action, renderRateLimitResetKey(
+      snapshot?.usage?.resetCreditsAvailable ?? null,
+      progress,
+      snapshot?.theme ?? "dark",
+      source.health.state
+    ));
+  }
+
+  private async renderResetHolds(): Promise<void> {
+    await Promise.all([...this.resetHolds.keys()].map(async (id) => {
+      const action = this.rateLimitResetActions.get(id);
+      if (action) await this.renderRateLimitReset(action);
+    }));
+  }
+
   private targetHealth(): HostHealth {
     if (!this.localHost || this.targetPlatform === this.localHost.platform) return this.localHealth;
     return this.relayClient?.currentHealth() ?? { state: "offline", reason: "relay-disconnected", changedAt: Date.now() };
@@ -306,6 +506,21 @@ export class DeckController {
     const remote = this.relayClient?.currentSnapshot();
     if (this.localHost && this.targetPlatform !== this.localHost.platform) return remote?.snapshot;
     return this.localSnapshot?.snapshot;
+  }
+
+  private accountUsageSource(): AccountUsageSource {
+    const local: AccountUsageSource = {
+      health: this.localHealth,
+      hostId: this.localHost?.hostId,
+      snapshot: this.localSnapshot?.snapshot
+    };
+    const remoteSnapshot = this.relayClient?.currentSnapshot();
+    const remote: AccountUsageSource | undefined = remoteSnapshot ? {
+      health: this.relayClient?.currentHealth() ?? { state: "offline", reason: "relay-disconnected", changedAt: Date.now() },
+      hostId: remoteSnapshot.host.hostId,
+      snapshot: remoteSnapshot.snapshot
+    } : undefined;
+    return selectAccountUsageSource(local, remote);
   }
 
   private isRemoteTarget(): boolean {
@@ -345,6 +560,12 @@ export class DeckController {
     this.lastImages.set(action.id, image);
   }
 
+  private renderUsageAction(label: string, action: KeyAction, render: () => Promise<void>): void {
+    void render()
+      .then(() => streamDeck.logger.info(`${label} action rendered (${action.id}).`))
+      .catch((error) => streamDeck.logger.error(`${label} action render failed (${action.id}): ${String(error)}`));
+  }
+
   private unregister<T>(action: ActionIdentity, registrations: Map<string, T>): void {
     registrations.delete(action.id);
     this.lastImages.delete(action.id);
@@ -362,7 +583,7 @@ export class DeckController {
     if (this.stopped) return;
     this.animation = setTimeout(async () => {
       this.animationFrame = (this.animationFrame + 1) % 12;
-      try { await this.renderAnimatedAgents(); }
+      try { await Promise.all([this.renderAnimatedAgents(), this.renderResetHolds()]); }
       finally { this.scheduleAnimation(); }
     }, 200);
   }

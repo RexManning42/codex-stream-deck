@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.7.0 - 2026-07-21
+
+- Added a source-distributed native SwiftUI iPhone companion that merges authenticated Mac and Windows snapshots while leaving the Stream Deck plugin independent.
+- Added pinned-TLS Nearby Wi-Fi pairing and private Tailscale HTTPS profiles without exposing Chrome DevTools or accepting wildcard/public relay listeners.
+- Added native task details, command receipts, Attention Center, optional notifications, one-task Live Activity follow mode, five WidgetKit experiences, and app-local key layouts.
+- Added circular 5-hour/weekly usage, a two-window overview, optional context rings, and a centered reset-credit action with a deliberate 1.2-second hold.
+- Added portable local iOS signing configuration; personal team, bundle, App Group, relay tokens, and official OpenAI keycap artwork remain outside public artifacts.
+- Fixed empty iPhone agent keys drawing two misaligned plus symbols.
+- Fixed the iPhone dashboard in landscape with a bounded two-column layout instead of stretching the square Micro device across the full screen width.
+- Fixed completed, selected, and mirrored tasks retaining stale working/unread colors across Mac and Windows while preserving fresh approval and active-work signals.
+- Fixed long-running iPhone relays retaining stale Codex version metadata after an app update; host identity remains stable and no Codex restart is required.
+- Updated renderer discovery and active-task detection for Codex macOS `26.715.70719` and Windows `26.715.8383.0` without hardcoding renderer hashes.
+- Added physical-iPhone Swift tests, macOS launcher/watcher self-tests, release privacy audits, and expanded relay, renderer, usage, and project regression coverage.
+- Added beginner installation, same-Wi-Fi verification, and release documentation plus explicit inspiration credit for the mobile companion concept.
+
 ## 0.6.3 - 2026-07-19
 
 - Fix completed tasks remaining stuck in the green finished state after they are opened.

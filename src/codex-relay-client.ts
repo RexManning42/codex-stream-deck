@@ -14,6 +14,7 @@ export type RelayClientConfig = { enabled: boolean; url: string; token: string }
 
 const CONFIG_PATH = join(codexDeckStateRoot(), "relay-client.json");
 export const RELAY_SNAPSHOT_STALE_MS = 5_000;
+export const RELAY_COMMAND_TIMEOUT_MS = 10_000;
 
 export function resolveRelayHealth(health: HostHealth, hasSnapshot: boolean, lastSnapshotReceivedAt: number, now = Date.now()): HostHealth {
   if (health.state === "ready" && (!hasSnapshot || now - lastSnapshotReceivedAt > RELAY_SNAPSHOT_STALE_MS)) {
@@ -66,7 +67,7 @@ export class CodexRelayClient {
       const timer = setTimeout(() => {
         this.pending.delete(requestId);
         reject(new Error("Remote Codex command timed out."));
-      }, 5_000);
+      }, RELAY_COMMAND_TIMEOUT_MS);
       this.pending.set(requestId, { resolve, reject, timer });
       socket.send(JSON.stringify({ type: "command", protocol: RELAY_PROTOCOL_VERSION, requestId, command }));
     });

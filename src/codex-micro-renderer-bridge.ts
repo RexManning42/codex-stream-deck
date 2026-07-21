@@ -38,6 +38,24 @@ type CdpResponse = {
   error?: { message?: string };
 };
 
+export type AgentDispatchPlan =
+  | { kind: "native"; slot: number; threadKey: string }
+  | { kind: "direct"; threadKey: string };
+
+export function resolveAgentDispatch(
+  snapshot: MicroSnapshot,
+  requestedSlot: number,
+  expectedThreadKey?: string
+): AgentDispatchPlan {
+  const requested = snapshot.slots.find((item) => item.id === requestedSlot);
+  const threadKey = expectedThreadKey ?? requested?.threadKey ?? null;
+  if (!threadKey) throw new Error("The selected Codex task has no stable thread identity.");
+  const current = snapshot.slots.find((item) => item.threadKey === threadKey);
+  return current
+    ? { kind: "native", slot: current.id, threadKey }
+    : { kind: "direct", threadKey };
+}
+
 const execFileAsync = promisify(execFile);
 const PORT_FILE = join(codexDeckStateRoot(), "codex-micro-bridge.json");
 const DEVICE_STATE = {
@@ -90,17 +108,22 @@ const SNAPSHOT_EXPRESSION = `(async () => {
 
   let queue = [root[reactKey]];
   const seen = new Set();
+  const queryClients = new Set();
   let found = null;
   while (queue.length && seen.size < 30000 && !found) {
     const fiber = queue.pop();
     if (!fiber || seen.has(fiber)) continue;
     seen.add(fiber);
     const maps = [];
-    if (fiber.memoizedProps?.value instanceof Map) maps.push(fiber.memoizedProps.value);
+    const contextValues = [fiber.memoizedProps?.value];
     let dependency = fiber.dependencies?.firstContext;
     while (dependency) {
-      if (dependency.memoizedValue instanceof Map) maps.push(dependency.memoizedValue);
+      contextValues.push(dependency.memoizedValue);
       dependency = dependency.next;
+    }
+    for (const value of contextValues) {
+      if (value instanceof Map) maps.push(value);
+      if (value && typeof value.getQueryCache === 'function' && typeof value.getQueryData === 'function') queryClients.add(value);
     }
     for (const chain of maps) {
       for (const node of chain.values()) {
@@ -190,6 +213,63 @@ const SNAPSHOT_EXPRESSION = `(async () => {
       toEpoch(slot.thread?.updatedAt) ?? toEpoch(slot.task?.updatedAt)
   }));
 
+  let usage;
+  for (const client of queryClients) {
+    try {
+      const query = client.getQueryCache().getAll().find((candidate) =>
+        JSON.stringify(candidate.queryKey) === '["rate-limit-status"]'
+      );
+      const refreshKey = Symbol.for('codex-deck-rate-limit-refresh-at');
+      const now = Date.now();
+      const dataUpdatedAt = Number(query?.state?.dataUpdatedAt) || 0;
+      const lastRefreshAttempt = Number(globalThis[refreshKey]) || 0;
+      if (query && typeof query.fetch === 'function' && now - dataUpdatedAt >= 15000 && now - lastRefreshAttempt >= 15000) {
+        globalThis[refreshKey] = now;
+        // Rate-limit refresh is network-backed and must never hold agent status,
+        // selection, or lighting behind its response. A later snapshot reads
+        // the refreshed query cache once this best-effort request completes.
+        try { Promise.resolve(query.fetch()).catch(() => {}); } catch {}
+      }
+      const data = query?.state?.data;
+      const rateLimit = data?.rate_limit;
+      if (!rateLimit || typeof rateLimit !== 'object') continue;
+      const normalizeWindow = (window, role) => {
+        if (!window || typeof window !== 'object') return null;
+        const used = Number(window.used_percent);
+        if (!Number.isFinite(used)) return null;
+        const seconds = Number(window.limit_window_seconds);
+        const minutes = Number.isFinite(seconds) && seconds > 0 ? seconds / 60 : null;
+        const kind = minutes != null && Math.abs(minutes - 300) <= 1 ? 'five-hour'
+          : minutes != null && Math.abs(minutes - 10080) <= 1 ? 'weekly'
+            : 'other';
+        const usedPercent = Math.min(100, Math.max(0, used));
+        return {
+          id: kind === 'other' ? role + '-' + String(minutes ?? 'unknown') : kind,
+          kind,
+          usedPercent,
+          remainingPercent: 100 - usedPercent,
+          windowDurationMins: minutes,
+          resetsAt: toEpoch(window.reset_at) ?? null
+        };
+      };
+      const windows = [
+        normalizeWindow(rateLimit.primary_window, 'primary'),
+        normalizeWindow(rateLimit.secondary_window, 'secondary')
+      ].filter(Boolean);
+      const available = Number(data.rate_limit_reset_credits?.available_count);
+      const applicable = Number(data.rate_limit_reset_credits?.applicable_available_count);
+      usage = {
+        windows,
+        observedAt: Number.isFinite(query.state?.dataUpdatedAt) && query.state.dataUpdatedAt > 0
+          ? query.state.dataUpdatedAt
+          : Date.now(),
+        resetCreditsAvailable: Number.isFinite(available) ? Math.max(0, Math.floor(available)) : null,
+        resetCreditsApplicable: Number.isFinite(applicable) ? Math.max(0, Math.floor(applicable)) : null
+      };
+      break;
+    } catch {}
+  }
+
   const html = document.documentElement;
   const body = document.body;
   const themeWords = [
@@ -214,12 +294,17 @@ const SNAPSHOT_EXPRESSION = `(async () => {
   const theme = explicitDark || (!explicitLight && (luminance != null ? luminance < 0.42 : matchMedia('(prefers-color-scheme: dark)').matches))
     ? 'dark'
     : 'light';
-  const activeThreadKey = document.querySelector('[data-app-action-sidebar-thread-id][aria-current="page"]')
-    ?.getAttribute('data-app-action-sidebar-thread-id')
-    ?? document.querySelector('[data-above-composer-conversation-id]')?.getAttribute('data-above-composer-conversation-id')
+  const activeThreadElement = document.querySelector('[data-app-action-sidebar-thread-id][data-app-action-sidebar-thread-active="true"]')
+    ?? document.querySelector('[data-app-action-sidebar-thread-id][aria-current="page"]');
+  const activeThreadKey = document.querySelector('[data-above-composer-conversation-id]')
+    ?.getAttribute('data-above-composer-conversation-id')
+    ?? activeThreadElement?.getAttribute('data-app-action-sidebar-thread-id')
     ?? undefined;
+  const activeThreadTitle = activeThreadElement
+    ? (activeThreadElement.getAttribute('aria-label') ?? activeThreadElement.textContent ?? '').trim().slice(0, 240) || undefined
+    : undefined;
 
-  return { slots, activeThreadKey, layout, agentSource, lightingAutoOff, theme };
+  return { slots, activeThreadKey, activeThreadTitle, layout, agentSource, lightingAutoOff, theme, ...(usage ? { usage } : {}) };
 })()`;
 
 export class CodexMicroRendererBridge {
@@ -248,16 +333,57 @@ export class CodexMicroRendererBridge {
 
   async sendAgent(slot: number, act: 0 | 1, expectedThreadKey?: string): Promise<void> {
     if (!Number.isInteger(slot) || slot < 0 || slot > 5) throw new Error(`Ungültiger Micro-Agent-Slot: ${slot}`);
-    const snapshot = this.lastSnapshot ?? await this.refresh();
-    const assignment = snapshot.slots.find((item) => item.id === slot);
-    const threadKey = expectedThreadKey ?? assignment?.threadKey ?? null;
-    if (expectedThreadKey && assignment?.threadKey !== expectedThreadKey) {
-      this.log(`Agent slot ${slot + 1} changed before dispatch; routing the preserved task identity.`);
+    const snapshot = act === 1 ? await this.refresh() : this.lastSnapshot ?? await this.refresh();
+    const plan = resolveAgentDispatch(snapshot, slot, expectedThreadKey);
+    if (plan.kind === "native") {
+      if (plan.slot !== slot) {
+        this.log(`Agent slot ${slot + 1} changed before dispatch; using current native slot ${plan.slot + 1}.`);
+      }
+      await this.dispatch("codex-micro-hid-event", {
+        event: { key: `AG0${plan.slot}`, act, slot: plan.slot, threadKey: plan.threadKey }
+      }, "codex-micro-hid-event");
+      if (act === 0) return;
+    } else {
+      if (act === 0) return;
+      this.log(`Task ${plan.threadKey} is outside this host's six native Micro slots; opening its exact thread identity.`);
     }
-    await this.dispatch("codex-micro-hid-event", {
-      event: { key: `AG0${slot}`, act, slot, threadKey }
-    }, "codex-micro-hid-event");
-    if (act === 1 && threadKey) this.sessionOwnership.markOpened(threadKey);
+    await this.ensureThreadActivated(plan.threadKey);
+    this.sessionOwnership.markOpened(plan.threadKey);
+  }
+
+  private async ensureThreadActivated(threadKey: string): Promise<void> {
+    const result = await this.evaluate<"active" | "opened" | "missing" | "failed">(`(async () => {
+      const threadKey = ${JSON.stringify(threadKey)};
+      const activeThreadKey = () => document.querySelector('[data-above-composer-conversation-id]')
+        ?.getAttribute('data-above-composer-conversation-id')
+        ?? document.querySelector('[data-app-action-sidebar-thread-id][data-app-action-sidebar-thread-active="true"]')
+          ?.getAttribute('data-app-action-sidebar-thread-id')
+        ?? document.querySelector('[data-app-action-sidebar-thread-id][aria-current="page"]')
+          ?.getAttribute('data-app-action-sidebar-thread-id')
+        ?? null;
+      const waitForActive = async (duration) => {
+        const deadline = Date.now() + duration;
+        while (Date.now() < deadline) {
+          if (activeThreadKey() === threadKey) return true;
+          await new Promise((resolve) => setTimeout(resolve, 25));
+        }
+        return activeThreadKey() === threadKey;
+      };
+      if (await waitForActive(250)) return 'active';
+      const item = [...document.querySelectorAll('[data-app-action-sidebar-thread-id]')]
+        .find((element) => element.getAttribute('data-app-action-sidebar-thread-id') === threadKey);
+      if (!item) return 'missing';
+      const selector = 'button, a, [role="button"], [role="link"]';
+      const clickable = item.matches(selector) ? item : item.querySelector(selector) ?? item.closest(selector) ?? item;
+      if (typeof clickable.click === 'function') clickable.click();
+      else clickable.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, view: window }));
+      return await waitForActive(1500) ? 'opened' : 'failed';
+    })()`);
+    if (result === "active" || result === "opened") return;
+    if (result === "missing") {
+      throw new Error("The exact Codex task is not present in this host's loaded sidebar. Open or pin it once in Codex, then retry.");
+    }
+    throw new Error("Codex received the task selection but did not activate the requested thread.");
   }
 
   async sendAction(slot: MicroActionSlot, act: 0 | 1): Promise<void> {
@@ -351,6 +477,78 @@ export class CodexMicroRendererBridge {
     })()`;
     try {
       await this.evaluate(expression);
+    } catch (error) {
+      this.disconnect();
+      throw error;
+    }
+  }
+
+  async consumeRateLimitReset(): Promise<void> {
+    await this.ensureConnected();
+    const redeemRequestId = randomUUID();
+    const expression = `(async () => {
+      const urls = [...new Set([
+        ...[...document.querySelectorAll('link[href], script[src]')].map((element) => element.href || element.src),
+        ...performance.getEntriesByType('resource').map((entry) => entry.name)
+      ])].filter((url) => url.includes('/assets/') && url.endsWith('.js'));
+      let client = null;
+      for (const url of urls) {
+        try {
+          const namespace = await import(url);
+          client = Object.values(namespace).find((candidate) =>
+            candidate && typeof candidate === 'object' &&
+            typeof candidate.safeGet === 'function' && typeof candidate.safePost === 'function'
+          );
+          if (client) break;
+        } catch {}
+      }
+      if (!client) throw new Error('Codex usage client is unavailable.');
+
+      const summary = await client.safeGet('/wham/usage');
+      const applicable = Number(summary?.rate_limit_reset_credits?.applicable_available_count);
+      if (Number.isFinite(applicable) && applicable <= 0) throw new Error('No reset credit is currently applicable.');
+
+      const details = await client.safeGet('/wham/rate-limit-reset-credits');
+      const credit = Array.isArray(details?.credits)
+        ? details.credits.find((candidate) => candidate?.status === 'available' && candidate?.is_supported_by_plan !== false)
+        : null;
+      if (!credit?.id) throw new Error('No available reset credit was found.');
+      const result = await client.safePost('/wham/rate-limit-reset-credits/consume', {
+        requestBody: { credit_id: credit.id, redeem_request_id: ${JSON.stringify(redeemRequestId)} }
+      });
+      if (result?.code !== 'reset' && result?.code !== 'already_redeemed') {
+        throw new Error('Codex rejected the reset credit: ' + String(result?.code ?? 'unknown'));
+      }
+
+      try {
+        const refreshed = await client.safeGet('/wham/usage');
+        const root = document.getElementById('root');
+        const reactKey = root && Object.getOwnPropertyNames(root).find((key) => key.startsWith('__reactContainer$'));
+        const queue = reactKey ? [root[reactKey]] : [];
+        const seen = new Set();
+        while (queue.length && seen.size < 30000) {
+          const fiber = queue.pop();
+          if (!fiber || seen.has(fiber)) continue;
+          seen.add(fiber);
+          const values = [fiber.memoizedProps?.value];
+          let dependency = fiber.dependencies?.firstContext;
+          while (dependency) { values.push(dependency.memoizedValue); dependency = dependency.next; }
+          const queryClient = values.find((value) =>
+            value && typeof value.setQueryData === 'function' && typeof value.invalidateQueries === 'function'
+          );
+          if (queryClient) {
+            queryClient.setQueryData(['rate-limit-status'], refreshed);
+            void queryClient.invalidateQueries({ queryKey: ['rate-limit-reset-credits'] });
+            break;
+          }
+          queue.push(fiber.child, fiber.sibling);
+        }
+      } catch {}
+      return result.code;
+    })()`;
+    try {
+      await this.evaluate(expression);
+      this.lastSnapshot = undefined;
     } catch (error) {
       this.disconnect();
       throw error;

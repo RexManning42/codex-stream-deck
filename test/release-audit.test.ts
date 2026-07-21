@@ -22,6 +22,12 @@ test("release audit accepts explicit clean roots and rejects private state", asy
     const privateResult = spawnSync(process.execPath, [auditScript, clean], { encoding: "utf8" });
     assert.equal(privateResult.status, 1);
     assert.match(privateResult.stderr, /private runtime state must not be packaged/);
+
+    await rm(join(clean, "relay-client.json"));
+    await writeFile(join(clean, "._manifest.json"), "local metadata\n", "utf8");
+    const metadataResult = spawnSync(process.execPath, [auditScript, clean], { encoding: "utf8" });
+    assert.equal(metadataResult.status, 1);
+    assert.match(metadataResult.stderr, /platform metadata must not be packaged/);
   } finally {
     await rm(root, { recursive: true, force: true });
   }

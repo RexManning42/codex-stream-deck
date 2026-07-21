@@ -11,10 +11,20 @@ export type RelayCommand =
   | { kind: "joystick"; direction: MicroDirection; distance: 0 | 1 }
   | { kind: "encoder"; act: 0 | 1 }
   | { kind: "reasoning"; direction: ReasoningAdjustment }
+  | { kind: "rate-limit-reset" }
   | { kind: "keycap"; keycapId: OfficialKeycapId };
 
 export type RelayAuthMessage = { type: "auth"; protocol: 1; token: string };
-export type RelayReadyMessage = { type: "ready"; protocol: 1; host: CodexHost };
+export const RELAY_CAPABILITIES = [
+  "agent", "action", "joystick", "encoder", "reasoning", "keycap", "usage", "rate-limit-reset"
+] as const;
+export type RelayReadyMessage = {
+  type: "ready";
+  protocol: 1;
+  host: CodexHost;
+  capabilities?: readonly string[];
+  bridge?: "native-codex-micro";
+};
 export type RelaySnapshotMessage = {
   type: "snapshot";
   protocol: 1;
@@ -38,13 +48,15 @@ export type HostSnapshot = { host: CodexHost; snapshot: MicroSnapshot; observedA
 
 type ActivityRecord = { activityAt: number; signature: string; lastSeenAt: number };
 type SessionOwner = { input: HostSnapshot; session: HostSessionPresence };
+const MIRROR_STATUS_FRESHNESS_MS = 5_000;
+const SESSION_COMPLETION_FALLBACK_MS = 5 * 60_000;
 
 export class HostActivityIndex {
   private readonly activity = new Map<string, ActivityRecord>();
   private readonly acknowledgedCompletions = new Map<string, number>();
-  private activeThreads = new Set<string>();
 
   merge(inputs: HostSnapshot[], now = Date.now(), authoritativeHostId?: string): RoutedAgentSlot[] {
+    const aliases = temporaryThreadAliases(inputs);
     const routed: RoutedAgentSlot[] = [];
     for (const input of inputs) {
       for (const slot of input.snapshot.slots) {
@@ -73,28 +85,27 @@ export class HostActivityIndex {
 
     const mirrors = new Map<string, RoutedAgentSlot[]>();
     for (const slot of routed) {
-      const identity = threadIdentity(slot.threadKey!);
+      const identity = resolvedThreadIdentity(slot.threadKey!, slot.host, aliases);
       const candidates = mirrors.get(identity) ?? [];
       candidates.push(slot);
       mirrors.set(identity, candidates);
     }
     const sessionOwners = sessionOwnerIndex(inputs);
     const activeThreads = new Set([
-      ...inputs
-      .map((input) => input.snapshot.activeThreadKey)
-      .filter((threadKey): threadKey is string => threadKey != null)
-      .map(threadIdentity),
-      ...routed.filter((slot) => slot.selected && slot.threadKey).map((slot) => threadIdentity(slot.threadKey!))
+      ...inputs.flatMap((input) => input.snapshot.activeThreadKey
+        ? [resolvedThreadIdentity(input.snapshot.activeThreadKey, input.host, aliases)] : []),
+      ...routed.filter((slot) => slot.selected && slot.threadKey)
+        .map((slot) => resolvedThreadIdentity(slot.threadKey!, slot.host, aliases))
     ]);
-    const newlyActiveThreads = new Set([...activeThreads].filter((identity) => !this.activeThreads.has(identity)));
     const merged = [...mirrors.entries()].map(([identity, candidates]) =>
-      mergeMirrors(identity, candidates, sessionOwners.get(identity), this.acknowledgedCompletions, newlyActiveThreads.has(identity)));
-    this.activeThreads = activeThreads;
-    const byThread = new Map(merged.map((slot) => [threadIdentity(slot.threadKey!), slot]));
+      mergeMirrors(identity, candidates, sessionOwners.get(identity), this.acknowledgedCompletions, activeThreads.has(identity)));
+    const byThread = new Map(merged.map((slot) => [
+      resolvedThreadIdentity(slot.threadKey!, slot.host, aliases), slot
+    ]));
     const authority = inputs.find((input) => input.host.hostId === authoritativeHostId) ?? inputs[0]!;
 
-    if (authority.snapshot.agentSource === "pinned") return pinnedSlotOrder(authority, inputs, byThread);
-    if (authority.snapshot.agentSource === "custom") return customSlotOrder(authority, inputs, byThread);
+    if (authority.snapshot.agentSource === "pinned") return pinnedSlotOrder(authority, inputs, byThread, aliases);
+    if (authority.snapshot.agentSource === "custom") return customSlotOrder(authority, inputs, byThread, aliases);
     return merged
       .sort(authority.snapshot.agentSource === "priority" ? comparePriority : compareActivity)
       .slice(0, 6)
@@ -116,7 +127,8 @@ function nativeSlotOrder(input: HostSnapshot, routed: RoutedAgentSlot[]): Routed
 function pinnedSlotOrder(
   authority: HostSnapshot,
   inputs: HostSnapshot[],
-  byThread: Map<string, RoutedAgentSlot>
+  byThread: Map<string, RoutedAgentSlot>,
+  aliases: Map<string, string>
 ): RoutedAgentSlot[] {
   const sources = [
     authority,
@@ -128,7 +140,7 @@ function pinnedSlotOrder(
     for (const source of sources) {
       const slot = source.snapshot.slots[sourceSlot];
       if (!slot?.threadKey) continue;
-      const identity = threadIdentity(slot.threadKey);
+      const identity = resolvedThreadIdentity(slot.threadKey, source.host, aliases);
       if (used.has(identity)) continue;
       used.add(identity);
       const routed = byThread.get(identity);
@@ -143,7 +155,8 @@ function pinnedSlotOrder(
 function customSlotOrder(
   authority: HostSnapshot,
   inputs: HostSnapshot[],
-  byThread: Map<string, RoutedAgentSlot>
+  byThread: Map<string, RoutedAgentSlot>,
+  aliases: Map<string, string>
 ): RoutedAgentSlot[] {
   const remoteSources = inputs.filter((input) =>
     input.host.hostId !== authority.host.hostId && input.snapshot.agentSource === "custom"
@@ -156,7 +169,8 @@ function customSlotOrder(
     ];
     for (const candidate of candidates) {
       if (!candidate.slot?.threadKey) continue;
-      const identity = threadIdentity(candidate.slot.threadKey);
+      const identity = resolvedThreadIdentity(
+        candidate.slot.threadKey, candidate.source.host, aliases);
       if (used.has(identity)) continue;
       used.add(identity);
       const routed = byThread.get(identity);
@@ -200,24 +214,42 @@ export function parseRelayCommand(value: unknown): RelayCommand | null {
   if (value.kind === "joystick" && ["up", "right", "down", "left"].includes(String(value.direction)) && binary(value.distance)) return value as RelayCommand;
   if (value.kind === "encoder" && binary(value.act)) return value as RelayCommand;
   if (value.kind === "reasoning" && ["decrease", "increase"].includes(String(value.direction))) return value as RelayCommand;
+  if (value.kind === "rate-limit-reset") return value as RelayCommand;
   if (value.kind === "keycap" && typeof value.keycapId === "string" && OFFICIAL_KEYCAP_IDS.includes(value.keycapId as OfficialKeycapId)) return value as RelayCommand;
   return null;
 }
 
 function isSnapshot(value: unknown): value is MicroSnapshot {
   if (!isRecord(value) || !Array.isArray(value.slots) || value.slots.length !== 6 || !isRecord(value.layout)) return false;
-  if (!value.slots.every((slot, index) => isRecord(slot) && slot.id === index && typeof slot.status === "string")) return false;
+  if (!value.slots.every((slot, index) => isRecord(slot) && slot.id === index && typeof slot.status === "string" &&
+    (slot.contextUsedPercent == null || finitePercent(slot.contextUsedPercent)))) return false;
   if (value.activeThreadKey != null && !isThreadKey(value.activeThreadKey)) return false;
+  if (value.activeThreadTitle != null && (typeof value.activeThreadTitle !== "string" || value.activeThreadTitle.length > 240)) return false;
+  if (value.usage != null && !isUsageSnapshot(value.usage)) return false;
   if (value.hostSessions == null) return true;
   return Array.isArray(value.hostSessions) && value.hostSessions.length <= 128 && value.hostSessions.every((session) =>
     isRecord(session) && isThreadKey(session.threadId) && validTimestamp(session.activityAt) != null &&
     ["idle", "working", "complete"].includes(String(session.status)) &&
-    (session.completionRevision == null || integerIn(session.completionRevision, 0, Number.MAX_SAFE_INTEGER))
+    (session.completionRevision == null || integerIn(session.completionRevision, 0, Number.MAX_SAFE_INTEGER)) &&
+    (session.contextUsedPercent == null || finitePercent(session.contextUsedPercent))
   );
 }
 
+function isUsageSnapshot(value: unknown): boolean {
+  if (!isRecord(value) || !Array.isArray(value.windows) || value.windows.length > 8 || validTimestamp(value.observedAt) == null) return false;
+  if (value.resetCreditsAvailable != null && !integerIn(value.resetCreditsAvailable, 0, Number.MAX_SAFE_INTEGER)) return false;
+  if (value.resetCreditsApplicable != null && !integerIn(value.resetCreditsApplicable, 0, Number.MAX_SAFE_INTEGER)) return false;
+  return value.windows.every((window) => isRecord(window) && typeof window.id === "string" && window.id.length <= 64 &&
+    ["five-hour", "weekly", "other"].includes(String(window.kind)) &&
+    finitePercent(window.usedPercent) && finitePercent(window.remainingPercent) &&
+    (window.windowDurationMins == null || (typeof window.windowDurationMins === "number" && Number.isFinite(window.windowDurationMins) && window.windowDurationMins > 0)) &&
+    (window.resetsAt == null || validTimestamp(window.resetsAt) != null));
+}
+
 function isHost(value: unknown): value is CodexHost {
-  return isRecord(value) && typeof value.hostId === "string" && typeof value.hostName === "string" && ["win32", "darwin"].includes(String(value.platform));
+  return isRecord(value) && typeof value.hostId === "string" && typeof value.hostName === "string" &&
+    ["win32", "darwin"].includes(String(value.platform)) &&
+    (value.codexVersion == null || (typeof value.codexVersion === "string" && value.codexVersion.length <= 64));
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -225,6 +257,9 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 function binary(value: unknown): value is 0 | 1 { return value === 0 || value === 1; }
+function finitePercent(value: unknown): boolean {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0 && value <= 100;
+}
 function integerIn(value: unknown, minimum: number, maximum: number): value is number {
   return Number.isInteger(value) && Number(value) >= minimum && Number(value) <= maximum;
 }
@@ -246,8 +281,15 @@ function mergeMirrors(
   candidates: RoutedAgentSlot[],
   sessionOwner: SessionOwner | undefined,
   acknowledgedCompletions: Map<string, number>,
-  newlyActiveOnAnyHost: boolean
+  activeOnAnyHost: boolean
 ): RoutedAgentSlot {
+  const newestObservation = Math.max(...candidates.map((candidate) => candidate.observedAt));
+  const statusCandidates = candidates.filter(
+    (candidate) => newestObservation - candidate.observedAt <= MIRROR_STATUS_FRESHNESS_MS);
+  const statusSessionOwner = sessionOwner &&
+    newestObservation - sessionOwner.input.observedAt <= MIRROR_STATUS_FRESHNESS_MS
+    ? sessionOwner
+    : undefined;
   let owner = candidates[0]!;
   const explicitOwner = sessionOwner && candidates.find((candidate) => candidate.host.hostId === sessionOwner.input.host.hostId);
   if (explicitOwner) owner = explicitOwner;
@@ -256,43 +298,55 @@ function mergeMirrors(
       if (compareOwnership(candidate, owner) < 0) owner = candidate;
     }
   }
-  const strongest = [...candidates].sort((left, right) =>
+  const strongest = [...statusCandidates].sort((left, right) =>
     mirrorStatusPriority(right.status) - mirrorStatusPriority(left.status) ||
     Number(right.selected) - Number(left.selected)
   )[0]!;
   const ownedCandidates = candidates.filter((candidate) => candidate.ownedByHost === true);
   const recencyCandidates = ownedCandidates.length ? ownedCandidates : candidates;
-  const sessionStatus = sessionOwner?.session.status;
-  const completionRevision = sessionOwner?.session.completionRevision;
-  const completionKey = sessionOwner ? `${sessionOwner.input.host.hostId}:${identity}` : identity;
+  const sessionStatus = statusSessionOwner?.session.status;
+  const completionRevision = statusSessionOwner?.session.completionRevision;
+  const completionKey = statusSessionOwner ? `${statusSessionOwner.input.host.hostId}:${identity}` : identity;
+  const strongestIsWorking = ["working", "thinking"].includes(strongest.status);
   if (sessionStatus === "complete" && completionRevision != null &&
-    newlyActiveOnAnyHost) {
+    activeOnAnyHost && !strongestIsWorking) {
     acknowledgedCompletions.set(completionKey, completionRevision);
   }
   const completionAcknowledged = sessionStatus === "complete" && completionRevision != null &&
     acknowledgedCompletions.get(completionKey) === completionRevision;
-  const liveOrAttention = ["working", "thinking", "approval", "awaiting-approval", "awaiting-response", "unread", "error"];
+  const completionIsRecent = sessionStatus === "complete" && statusSessionOwner != null &&
+    newestObservation - statusSessionOwner.session.activityAt <= SESSION_COMPLETION_FALLBACK_MS;
+  const attention = ["approval", "awaiting-approval", "awaiting-response", "error"];
+  const attentionStatus = attention.find((status) => statusCandidates.some((candidate) => candidate.status === status));
   const completionLike = ["complete", "completed", "done"];
-  const status = completionAcknowledged && completionLike.includes(strongest.status)
-    ? "idle"
-    : sessionStatus === "complete" && !completionAcknowledged && !liveOrAttention.includes(strongest.status)
-      ? "complete"
-      : sessionStatus === "working" && !liveOrAttention.includes(strongest.status)
-        ? "working"
-        : strongest.status;
+  const status = attentionStatus
+    ? attentionStatus
+    : strongestIsWorking
+      ? strongest.status
+      : sessionStatus === "working"
+      ? "working"
+      : sessionStatus === "complete" && completionIsRecent && !completionAcknowledged
+        ? (completionLike.includes(strongest.status) || strongest.status === "unread" ? strongest.status : "complete")
+        : completionAcknowledged
+          ? "idle"
+          : strongest.status;
   const routedOwner = sessionOwner?.input.host ?? owner.host;
+  const contextCandidate = candidates.find((candidate) =>
+    candidate.ownedByHost === true && candidate.contextUsedPercent != null)
+    ?? candidates.find((candidate) => candidate.contextUsedPercent != null);
   return {
     ...owner,
     host: routedOwner,
     ownedByHost: sessionOwner ? true : owner.ownedByHost,
     status,
-    selected: candidates.some((candidate) => candidate.selected),
+    selected: statusCandidates.some((candidate) => candidate.selected),
+    contextUsedPercent: sessionOwner?.session.contextUsedPercent ?? contextCandidate?.contextUsedPercent,
     // A delayed status update in a cloud/SSH mirror must not make the task look
     // newly active or cause two simultaneously working keys to swap places.
     // Status and selection remain aggregated, but recency follows the backing
     // rollout owner whenever ownership is known.
     activityAt: Math.max(sessionOwner?.session.activityAt ?? 0, ...recencyCandidates.map((candidate) => candidate.activityAt ?? 0)),
-    observedAt: Math.max(...candidates.map((candidate) => candidate.observedAt))
+    observedAt: newestObservation
   };
 }
 
@@ -350,4 +404,50 @@ function isThreadKey(value: unknown): value is string {
 
 function threadIdentity(value: string): string {
   return value.match(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i)?.[0]?.toLowerCase() ?? value;
+}
+
+function temporaryThreadAliases(inputs: HostSnapshot[]): Map<string, string> {
+  const aliases = new Map<string, string>();
+  for (const input of inputs) {
+    const ownedSessions = new Set(
+      (input.snapshot.hostSessions ?? []).map((session) => threadIdentity(session.threadId)));
+    if (!ownedSessions.size) continue;
+
+    for (const slot of input.snapshot.slots) {
+      if (!slot.threadKey?.toLowerCase().includes(":client-new-thread:")) continue;
+      const title = normalizedTitle(slot.title);
+      if (!title) continue;
+      const matches = new Set<string>();
+      for (const remote of inputs) {
+        if (remote.host.hostId === input.host.hostId) continue;
+        for (const candidate of remote.snapshot.slots) {
+          if (!candidate.threadKey || normalizedTitle(candidate.title) !== title) continue;
+          const identity = threadIdentity(candidate.threadKey);
+          if (ownedSessions.has(identity)) matches.add(identity);
+        }
+      }
+      if (matches.size !== 1) continue;
+      aliases.set(
+        aliasKey(input.host, threadIdentity(slot.threadKey)), [...matches][0]!);
+    }
+  }
+  return aliases;
+}
+
+function resolvedThreadIdentity(
+  threadKey: string,
+  host: CodexHost,
+  aliases: Map<string, string>
+): string {
+  const identity = threadIdentity(threadKey);
+  return aliases.get(aliasKey(host, identity)) ?? identity;
+}
+
+function aliasKey(host: CodexHost, identity: string): string {
+  return `${host.hostId}:${identity}`;
+}
+
+function normalizedTitle(title: string | null | undefined): string | null {
+  const value = title?.trim().toLocaleLowerCase();
+  return value ? value : null;
 }

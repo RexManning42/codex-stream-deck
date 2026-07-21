@@ -19,9 +19,35 @@ await build({
   minify: false
 });
 
-await cp(resolve("node_modules/ws"), resolve(output, "node_modules/ws"), { recursive: true });
+await build({
+  entryPoints: [resolve("launcher/mobile-pairing-cli.ts")],
+  outfile: resolve(output, "mobile-pairing.mjs"),
+  bundle: true,
+  platform: "node",
+  format: "esm",
+  target: "node20",
+  minify: false,
+  banner: { js: "import { createRequire as __createRequire } from 'node:module'; const require = __createRequire(import.meta.url);" }
+});
 
-for (const filename of ["Start Codex Deck.cmd", "Start-CodexDeck.ps1", "Watch-CodexDeck.ps1", "Configure-CodexDeckRelay.ps1", "README.txt"]) {
+// Copy the runtime package from an explicit allowlist. Cloud-sync conflict
+// copies (for example `index 3.js`) must never leak into release archives.
+const wsSource = resolve("node_modules/ws");
+const wsOutput = resolve(output, "node_modules/ws");
+await mkdir(resolve(wsOutput, "lib"), { recursive: true });
+for (const filename of ["LICENSE", "package.json", "browser.js", "index.js", "wrapper.mjs"]) {
+  await cp(resolve(wsSource, filename), resolve(wsOutput, filename));
+}
+for (const filename of [
+  "buffer-util.js", "constants.js", "event-target.js", "extension.js",
+  "limiter.js", "permessage-deflate.js", "receiver.js", "sender.js",
+  "stream.js", "subprotocol.js", "validation.js", "websocket.js",
+  "websocket-server.js"
+]) {
+  await cp(resolve(wsSource, "lib", filename), resolve(wsOutput, "lib", filename));
+}
+
+for (const filename of ["Start Codex Deck.cmd", "Start-CodexDeck.ps1", "Watch-CodexDeck.ps1", "Configure-CodexDeckRelay.ps1", "Configure-CodexDeckMobile.ps1", "README.txt"]) {
   await cp(resolve("launcher", filename), resolve(output, filename));
 }
 await cp(resolve("docs"), resolve(output, "docs"), { recursive: true });

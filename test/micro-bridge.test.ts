@@ -1,9 +1,12 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
-import { REASONING_ENCODER_KEYS, retainEvaluationPromise, selectCodexMainTarget } from "../src/codex-micro-renderer-bridge.js";
+import {
+  REASONING_ENCODER_KEYS, resolveAgentDispatch, retainEvaluationPromise, selectCodexMainTarget
+} from "../src/codex-micro-renderer-bridge.js";
 import { ADDITIONAL_KEYCAPS, OFFICIAL_KEYCAP_IDS } from "../src/keycaps.js";
 import { visualStatusFromMicro } from "../src/status.js";
+import type { MicroSnapshot } from "../src/types.js";
 
 test("official Micro statuses map to the Stream Deck color states", () => {
   assert.equal(visualStatusFromMicro("off"), "empty");
@@ -36,6 +39,8 @@ test("renderer bridge uses native Micro events and discovers hashed modules at r
   assert.match(source, /codex-micro-agent-source/);
   assert.match(source, /data-app-action-sidebar-thread-id/);
   assert.match(source, /activeThreadKey/);
+  assert.match(source, /data-above-composer-conversation-id/);
+  assert.match(source, /data-app-action-sidebar-thread-active/);
   assert.match(source, /directSettingReader/);
   assert.match(source, /get-setting/);
   assert.match(source, /found\.node\.store\.get\.bind\(found\.node\.store\)/);
@@ -70,6 +75,38 @@ test("renderer evaluations retain their awaited promise until CDP has collected 
   assert.match(expression, /setTimeout\(\(\) => store\.delete/);
   const namespaced = retainEvaluationPromise("Promise.resolve(true)", "bridge-a-1");
   assert.match(namespaced, /codex-deck-bridge-a-1/);
+});
+
+test("agent routing follows the stable thread identity when a cross-host slot is stale", () => {
+  const snapshot = {
+    slots: Array.from({ length: 6 }, (_, id) => ({
+      id,
+      threadKey: `local:00000000-0000-4000-8000-00000000000${id}`,
+      title: `Task ${id}`,
+      status: "idle",
+      selected: false
+    })),
+    layout: {
+      version: 1,
+      slots: {
+        ACT06: { keycapId: "FAST" }, ACT07: { keycapId: "APPR" },
+        ACT08: { keycapId: "REJ" }, ACT09: { keycapId: "SPLIT" },
+        ACT10_ACT11: { keycapId: "CODEX" }, ACT12: { keycapId: "CODEX" }
+      },
+      analogStick: { up: {}, right: {}, down: {}, left: {} }
+    },
+    agentSource: "priority",
+    lightingAutoOff: "3-minutes",
+    theme: "dark"
+  } as MicroSnapshot;
+  const movedThread = snapshot.slots[4]!.threadKey!;
+  assert.deepEqual(resolveAgentDispatch(snapshot, 2, movedThread), {
+    kind: "native", slot: 4, threadKey: movedThread
+  });
+  const offDeckThread = "local:10000000-0000-4000-8000-000000000099";
+  assert.deepEqual(resolveAgentDispatch(snapshot, 2, offDeckThread), {
+    kind: "direct", threadKey: offDeckThread
+  });
 });
 
 test("reasoning controls use the official native encoder rotation events", async () => {
@@ -124,6 +161,10 @@ test("controller avoids overlapping polls and redundant image writes", async () 
   assert.match(source, /status === "thinking" \|\| status === "input"/);
   assert.match(source, /pressedAgents/);
   assert.match(source, /pressedControlTargets/);
+  assert.match(source, /mobileSnapshotDirty/);
+  assert.match(source, /runAndInvalidate/);
+  assert.doesNotMatch(source, /const runAndRefresh/);
+  assert.doesNotMatch(source, /if \(act === 1\) await this\.refresh\(\)/);
   assert.match(targetSource, /control-target\.json/);
   assert.match(source, /targetPlatform === "darwin"/);
   assert.doesNotMatch(source, /setInterval\(/);

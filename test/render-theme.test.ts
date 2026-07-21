@@ -21,6 +21,18 @@ test("light and dark agent themes remain visually distinct", () => {
   assert.notEqual(light, dark);
 });
 
+test("agent context ring is bounded and can be hidden globally", () => {
+  const visible = renderAgentSvg(0, "Context test", "thinking", false, 0, "dark", "M", "ready", 84, true);
+  assert.match(visible, /data-context-used="84"/);
+  assert.match(visible, new RegExp(SIGNAL_COLORS.dark.input, "i"));
+
+  const hidden = renderAgentSvg(0, "Context test", "thinking", false, 0, "dark", "M", "ready", 84, false);
+  assert.doesNotMatch(hidden, /data-context-used=/);
+
+  const unavailable = renderAgentSvg(0, "No context", "idle", false, 0, "dark", "M", "ready", undefined, true);
+  assert.doesNotMatch(unavailable, /data-context-used=/);
+});
+
 test("user-local monochrome SVGs normalize to an off-white dark glyph", () => {
   const input = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor"><path d="M2 2h20v20H2z" stroke="#000"/></svg>';
   const output = decodeURIComponent(renderImportedKeycap(input, "dark").replace(/^data:image\/svg\+xml;charset=utf8,/, ""));

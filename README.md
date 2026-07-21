@@ -16,6 +16,7 @@ The same Stream Deck plugin package works in all three modes. Install only the l
 | Windows only | Windows | Local Windows Codex | [Windows setup](docs/WINDOWS.md) |
 | Mac only | macOS | Local Mac Codex | [macOS setup](docs/MACOS.md) |
 | Windows + Mac | Windows | Both apps; six agents are merged | [Multi-host setup](docs/MULTI_HOST.md) |
+| iPhone companion | iOS 17+ | Private Mac and/or Windows nodes | [iPhone app](docs/IOS.md) · [Install from source](docs/IOS_INSTALL.md) |
 
 Windows-only and Mac-only mode have no relay, no second computer dependency, and no host badges. Multi-host mode is optional and can be disabled without changing the local bridge on either machine.
 
@@ -27,11 +28,14 @@ Windows-only and Mac-only mode have no relay, no second computer dependency, and
 - Native key-down/key-up handling for Micro slots `ACT06` through `ACT12`.
 - Native joystick up, right, down, left, and encoder click.
 - Dedicated reasoning-effort up/down buttons with press-and-hold repeat.
+- Live usage controls: a configurable circular 5-hour/weekly limit key and a two-window overview.
+- A centered reset-credit counter with a deliberate 1.2-second hold before an applicable credit can be consumed.
 - A local `codex://threads/new` action for a new task.
 - Standalone actions for all official single-size keycaps, resolved from the installed Codex build at runtime.
 - Optional local loading of official keycap SVGs; those protected files are never included in this repository or its releases.
 - Optional authenticated SSH/Tailscale relay for one Stream Deck controlling Windows and Mac Codex together.
 - Per-host health on the Windows/Mac target key, with last-known agent tiles visibly marked when native desktop signals are uncertain or the relay is offline.
+- Native SwiftUI iPhone companion with dual-host agents, usage, reset credits, and authenticated Micro controls over pinned-TLS Nearby Wi-Fi or private Tailscale HTTPS.
 
 ## Requirements
 
@@ -52,6 +56,15 @@ Other Stream Deck models may work, but the included layout and physical-device t
 3. Follow [Windows](docs/WINDOWS.md), [macOS](docs/MACOS.md), or [Windows + Mac](docs/MULTI_HOST.md).
 4. In **Codex Settings > Codex Micro**, choose the agent source, action assignments, joystick actions, and encoder behavior.
 5. Build the two Stream Deck pages below.
+
+The iPhone companion is currently source-only: **a Mac with Xcode is required
+to build, sign, and install it**, even when the phone will control only a
+Windows Codex node. There is no App Store, TestFlight, or pre-signed IPA build
+yet. After installation, the Mac does not need to stay online unless it is one
+of the computers being controlled. Nearby pairing works on the same private
+Wi-Fi without Tailscale; add Tailscale for private control away from home. See
+the [beginner installation guide](docs/IOS_INSTALL.md) and the
+[local Wi-Fi test](docs/IOS_LOCAL_WIFI.md).
 
 In Windows + Mac mode, choose the same agent-source mode in both Codex apps when you want both native Pinned lists or both sets of Individual assignments to contribute. Pinned tasks are interleaved fairly. For Individual assignments, the Stream Deck computer wins when both apps assign different tasks to one button, while the other computer fills empty slots. Mirrored copies of the same task are shown only once. See [Multi-host behavior](docs/MULTI_HOST.md#agent-source-modes).
 
@@ -80,6 +93,16 @@ The action names describe the default Codex Micro setup. The keys always follow 
 ²Use the target key only in Windows + Mac mode. In a single-computer setup, leave it empty or replace it with another keycap action. ³Configure Stream Deck's built-in **Switch Profile** action to return to your own standard profile; no user-specific profile ID is distributed.
 
 The page-navigation and profile-switch keys are built-in Stream Deck actions. All other named controls come from Codex Deck. Every official Codex Micro keycap is also exposed as a standalone action, so extra pages can be customized without changing the six synchronized Micro action slots.
+
+### Usage and reset controls
+
+![Usage limit, overview, and reset-credit controls](docs/assets/usage-controls-preview.svg)
+
+Add **Usage Limit** for the existing circular capacity display. Its Stream Deck property inspector can pin the key to **5 hours** or **Weekly**, while **Automatic** prefers 5 hours and falls back to weekly whenever Codex temporarily omits the shorter window. **Usage Overview** shows both windows as separate horizontal bars; a missing window stays visible as unavailable instead of being mistaken for zero capacity.
+
+**Rate Limit Reset** shows the number of credits Codex currently reports. The count remains centered inside the reset arrow and the action is dimmed only when no credit is available. Consuming a credit requires holding the key for 1.2 seconds; a short tap does nothing, and Codex's current applicability check still has to pass. This action uses Codex's current native usage client and is therefore subject to the same undocumented compatibility boundary as the Micro bridge.
+
+Usage and reset credits are account-scoped. In Windows + Mac mode these three keys therefore do not follow the Windows/Mac function-key target: they prefer the healthy local account snapshot and fall back to the paired host only when local usage data is unavailable.
 
 ## Official keycap SVGs are not included
 
@@ -117,7 +140,7 @@ No virtual HID driver is installed and no Codex application file is patched. See
 - The Codex debug endpoint remains loopback-only and is never the multi-host relay endpoint.
 - CDP is privileged: another untrusted process running as the same local user could try to access it.
 - Codex Deck has no telemetry, cloud service, or update service.
-- Single-host mode reads no rollout data. Multi-host mode reads only exact local rollout **filenames**, never their contents, to distinguish a task's owning desktop from a cloud/SSH mirror.
+- Codex Deck reads exact local rollout filenames for ownership and a bounded recent tail for structural status tags plus numeric `token_count` fields. It does not parse or relay prompts, responses, project names, or other conversation content.
 - Optional SVGs stay in the user-local icons directory and are never uploaded.
 - Multi-host mode accepts only authenticated, typed Codex Deck commands over SSH or Tailscale; wildcard and arbitrary public-IP listeners are rejected.
 - Private relay tokens, local host state, logs, and personal paths are excluded by the release audit.
@@ -128,11 +151,12 @@ Do not use the launcher while running untrusted local software. See [SECURITY.md
 
 The current build was locally validated against:
 
-- Codex for Windows `26.715.4045.0`
-- Codex for macOS `26.715.31925`
+- Codex for Windows `26.715.8383.0`
+- Codex for macOS `26.715.70719` (`5650`)
 - Stream Deck `7.4.2.22730`
 - Windows `10.0.26220.0`
 - Node.js `24.13.0`
+- iPhone `iOS 27.0` (physical-device build and tests)
 - Standard 15-key Stream Deck MK.2
 
 The Windows physical-device path and the Windows+Mac relay were exercised on the real setup. The macOS launcher, watcher, native bridge, and plugin package are validated; a Stream Deck physically attached to the Mac has not yet been hardware-tested. These are tested versions, not strict maximums.
@@ -155,6 +179,14 @@ npm run audit:release
 `npm run release:prepare` creates a versioned local release-candidate directory with the plugin package, Windows launcher ZIP, and SHA-256 checksums. The macOS ZIP must be created on macOS with `scripts/package-macos-release.sh` so executable bits survive; pass that ZIP to `scripts/prepare-release.ps1 -MacArchivePath ...`.
 
 Nothing is published automatically. See [CONTRIBUTING.md](CONTRIBUTING.md).
+
+## Acknowledgements
+
+The idea to explore a phone-native Codex Micro companion was inspired in part
+by the public mobile concept shared by [Shikhar (@xikhar)](https://x.com/xikhar).
+Codex Deck Mobile is an independent implementation built on this project's own
+authenticated bridge, native controls, and visual system; no source code or
+artwork from that concept is included.
 
 ## License and trademarks
 

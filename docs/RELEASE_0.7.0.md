@@ -15,7 +15,8 @@ Windows, macOS, and Windows-plus-Mac Stream Deck paths.
 - Usage Limit, two-window Usage Overview, and hold-to-confirm Rate Limit Reset
   Stream Deck actions.
 - Compatibility fixes for current Codex desktop builds, active/completed task
-  state, empty agent artwork, and live relay version metadata after updates.
+  state, empty agent artwork, adaptive landscape layout, and live relay version
+  metadata after updates.
 
 ## Choose the correct download
 
@@ -42,6 +43,11 @@ Windows, macOS, and Windows-plus-Mac Stream Deck paths.
 Existing Stream Deck layouts and desktop-only installations remain supported.
 For plugin updates, reload the Codex Deck Stream Deck plugin; do not restart
 Codex merely to update the plugin.
+
+Foreground task status is snapshot-driven. A newly started or completed task
+normally appears on the phone within about one to three seconds; truly
+event-driven instant delivery is planned separately rather than increasing CDP
+polling load in this release.
 
 ## Validation boundary
 

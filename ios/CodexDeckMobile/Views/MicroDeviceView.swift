@@ -52,6 +52,7 @@ struct ActiveChatsView: View {
 
 struct CodexMicroDeviceView: View {
   @Environment(DashboardStore.self) private var store
+  @Environment(\.verticalSizeClass) private var verticalSizeClass
   let placements: [MobileAgentPlacement]
   let editKey: (DeviceKeySlot) -> Void
   let showAgent: (AgentReference) -> Void
@@ -93,11 +94,12 @@ struct CodexMicroDeviceView: View {
               .frame(width: 61)
             }
           }
-          .padding(.horizontal, 43)
-          .padding(.vertical, 38)
+          .padding(.horizontal, verticalSizeClass == .compact ? 33 : 43)
+          .padding(.vertical, verticalSizeClass == .compact ? 30 : 38)
+          .scaleEffect(verticalSizeClass == .compact ? 0.97 : 1)
 
           DeviceDetails(size: proxy.size)
-          DeviceScrews().padding(17)
+          DeviceScrews().padding(verticalSizeClass == .compact ? 18 : 17)
         }
       }
       .aspectRatio(1.02, contentMode: .fit)
@@ -705,12 +707,17 @@ private struct DeviceScrews: View {
 }
 
 private struct Screw: View {
+  @Environment(\.verticalSizeClass) private var verticalSizeClass
+
   var body: some View {
     Image(systemName: "hexagon.fill")
-      .font(.system(size: 15, weight: .black))
+      .font(.system(size: verticalSizeClass == .compact ? 10 : 15, weight: .black))
       .foregroundStyle(Color(red: 0.16, green: 0.17, blue: 0.17))
       .overlay {
-        Circle().fill(.black.opacity(0.82)).frame(width: 7, height: 7)
+        Circle().fill(.black.opacity(0.82))
+          .frame(
+            width: verticalSizeClass == .compact ? 4.5 : 7,
+            height: verticalSizeClass == .compact ? 4.5 : 7)
       }
       .shadow(color: .white.opacity(0.9), radius: 0, y: 1)
   }

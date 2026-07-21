@@ -8,6 +8,7 @@
 - Added circular 5-hour/weekly usage, a two-window overview, optional context rings, and a centered reset-credit action with a deliberate 1.2-second hold.
 - Added portable local iOS signing configuration; personal team, bundle, App Group, relay tokens, and official OpenAI keycap artwork remain outside public artifacts.
 - Fixed empty iPhone agent keys drawing two misaligned plus symbols.
+- Fixed the iPhone dashboard in landscape with a bounded two-column layout instead of stretching the square Micro device across the full screen width.
 - Fixed completed, selected, and mirrored tasks retaining stale working/unread colors across Mac and Windows while preserving fresh approval and active-work signals.
 - Fixed long-running iPhone relays retaining stale Codex version metadata after an app update; host identity remains stable and no Codex restart is required.
 - Updated renderer discovery and active-task detection for Codex macOS `26.715.70719` and Windows `26.715.8383.0` without hardcoding renderer hashes.

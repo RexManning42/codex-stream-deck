@@ -130,6 +130,12 @@ On iOS 26, WidgetKit supplies the system Liquid Glass container itself. Codex De
 
 The foreground app suppresses redundant WidgetKit timeline reloads when only a snapshot timestamp changed. Material agent, status, context, connection, or usage changes still reload the widgets immediately; timestamp-only cache writes are bounded to avoid unnecessary main-process and widget-extension work.
 
+Foreground task status is currently snapshot-driven. The desktop controller and
+mobile relay each use a 1.2-second bounded refresh cycle, so a transition may
+take roughly one to three seconds to reach the phone depending on timing. This
+keeps renderer and battery load predictable; instant event-driven delivery is a
+future transport improvement.
+
 ## Pair on the same Wi-Fi (recommended first setup)
 
 Nearby pairing needs no Tailscale account. The computer creates a private

@@ -2,6 +2,7 @@ import SwiftUI
 
 struct DashboardView: View {
   @Environment(DashboardStore.self) private var store
+  @Environment(\.verticalSizeClass) private var verticalSizeClass
   @State private var resetConfirmation = false
   @State private var showingAllKeys = false
   @State private var editingKeySlot: DeviceKeySlot?
@@ -19,12 +20,7 @@ struct DashboardView: View {
           if store.profiles.isEmpty {
             PairingWelcome()
           } else {
-            CodexMicroDeviceView(
-              placements: store.mobileAgentPlacements,
-              editKey: { editingKeySlot = $0 },
-              showAgent: { store.presentAgent($0) })
-            ActiveChatsView()
-            UsageHero(resetConfirmation: $resetConfirmation)
+            dashboardContent(compactHeight: verticalSizeClass == .compact)
           }
           Color.clear.frame(height: 16)
         }
@@ -75,6 +71,43 @@ struct DashboardView: View {
     .sensoryFeedback(.impact(weight: .medium), trigger: store.presentedAgentReference?.threadIdentity)
     .sensoryFeedback(.success, trigger: store.commandSuccessPulse)
     .sensoryFeedback(.error, trigger: store.commandErrorPulse)
+  }
+
+  @ViewBuilder
+  private func dashboardContent(compactHeight: Bool) -> some View {
+    if compactHeight {
+      ViewThatFits(in: .horizontal) {
+        HStack(alignment: .top, spacing: 18) {
+          microDevice
+            .frame(width: 325)
+          VStack(spacing: 18) {
+            ActiveChatsView()
+            UsageHero(resetConfirmation: $resetConfirmation)
+          }
+          .frame(width: 315)
+        }
+        .frame(maxWidth: .infinity, alignment: .top)
+
+        VStack(spacing: 18) {
+          microDevice
+            .frame(maxWidth: 360)
+          ActiveChatsView()
+          UsageHero(resetConfirmation: $resetConfirmation)
+        }
+        .frame(maxWidth: .infinity)
+      }
+    } else {
+      microDevice
+      ActiveChatsView()
+      UsageHero(resetConfirmation: $resetConfirmation)
+    }
+  }
+
+  private var microDevice: some View {
+    CodexMicroDeviceView(
+      placements: store.mobileAgentPlacements,
+      editKey: { editingKeySlot = $0 },
+      showAgent: { store.presentAgent($0) })
   }
 }
 

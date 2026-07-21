@@ -260,6 +260,26 @@ test("iPhone header keeps the Codex Micro wordmark on one line", async () => {
   assert.match(header, /\.fixedSize\(horizontal: true, vertical: false\)/);
 });
 
+test("iPhone landscape uses a bounded two-column dashboard", async () => {
+  const dashboard = await readFile(
+    new URL("../ios/CodexDeckMobile/Views/DashboardView.swift", import.meta.url), "utf8");
+  assert.match(dashboard, /@Environment\(\\\.verticalSizeClass\)/);
+  assert.match(dashboard, /compactHeight: verticalSizeClass == \.compact/);
+  assert.match(dashboard, /ViewThatFits\(in: \.horizontal\)/);
+  assert.match(dashboard, /HStack\(alignment: \.top, spacing: 18\)/);
+  assert.match(dashboard, /microDevice[\s\S]*?\.frame\(width: 325\)/);
+  assert.match(dashboard, /\.frame\(width: 315\)/);
+  assert.match(dashboard, /microDevice[\s\S]*?\.frame\(maxWidth: 360\)/);
+  const device = await readFile(
+    new URL("../ios/CodexDeckMobile/Views/MicroDeviceView.swift", import.meta.url), "utf8");
+  assert.match(device, /padding\(\.horizontal, verticalSizeClass == \.compact \? 33 : 43\)/);
+  assert.match(device, /padding\(\.vertical, verticalSizeClass == \.compact \? 30 : 38\)/);
+  assert.match(device, /DeviceScrews\(\)\.padding\(verticalSizeClass == \.compact \? 18 : 17\)/);
+  assert.match(device, /size: verticalSizeClass == \.compact \? 10 : 15/);
+  assert.match(device, /width: verticalSizeClass == \.compact \? 4\.5 : 7/);
+  assert.match(device, /scaleEffect\(verticalSizeClass == \.compact \? 0\.97 : 1\)/);
+});
+
 test("iPhone app icon supplies opaque light, dark, and tinted 1024px appearances", async () => {
   const iconRoot = new URL(
     "../ios/CodexDeckMobile/Assets.xcassets/AppIcon.appiconset/", import.meta.url);

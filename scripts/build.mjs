@@ -1,12 +1,17 @@
 import { build } from "esbuild";
-import { cp, mkdir, rm } from "node:fs/promises";
+import { cp, mkdir, readdir, rm } from "node:fs/promises";
 import { resolve } from "node:path";
 import "./generate-plugin-icons.mjs";
 
 const output = resolve("dist/com.simeo.codex-deck.sdPlugin");
-// Recreate the complete package root so stale files from another OS (notably
-// Finder AppleDouble `._*` entries) can never leak into the next build.
-await rm(output, { recursive: true, force: true });
+// Keep the package root itself because Windows may have a directory handle open
+// while Stream Deck is installed. Clearing every child still prevents stale
+// files from another OS (notably Finder AppleDouble `._*` entries) leaking into
+// the next build.
+await mkdir(output, { recursive: true });
+for (const entry of await readdir(output)) {
+  await rm(resolve(output, entry), { recursive: true, force: true });
+}
 await mkdir(resolve(output, "bin"), { recursive: true });
 await mkdir(resolve(output, "static/imgs"), { recursive: true });
 await mkdir(resolve(output, "static/property-inspector"), { recursive: true });

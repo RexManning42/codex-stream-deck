@@ -27,6 +27,7 @@ async function walk(path) {
     return;
   }
   const name = basename(path);
+  if (name === ".DS_Store" || name.startsWith("._")) failures.push(`${path}: platform metadata must not be packaged`);
   if (forbiddenFiles.has(name.toLowerCase())) failures.push(`${path}: private runtime state must not be packaged`);
   if (extname(name).toLowerCase() === ".svg" && protectedKeycaps.has(name.slice(0, -4).toUpperCase())) {
     failures.push(`${path}: protected Codex keycap SVG must not be packaged`);

@@ -4,8 +4,9 @@ import { resolve } from "node:path";
 import "./generate-plugin-icons.mjs";
 
 const output = resolve("dist/com.simeo.codex-deck.sdPlugin");
-await rm(resolve(output, "bin"), { recursive: true, force: true });
-await rm(resolve(output, "static"), { recursive: true, force: true });
+// Recreate the complete package root so stale files from another OS (notably
+// Finder AppleDouble `._*` entries) can never leak into the next build.
+await rm(output, { recursive: true, force: true });
 await mkdir(resolve(output, "bin"), { recursive: true });
 await mkdir(resolve(output, "static/imgs"), { recursive: true });
 await mkdir(resolve(output, "static/property-inspector"), { recursive: true });

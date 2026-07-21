@@ -54,6 +54,9 @@ test("startup monitoring survives Codex updates without duplicate watchers", asy
   assert.match(build, /Configure-CodexDeckRelay\.ps1/);
   assert.match(build, /Configure-CodexDeckMobile\.ps1/);
   assert.match(build, /replace\(\/\\r\\n\/g, "\\n"\)/);
+  assert.match(build, /Cloud-sync conflict/);
+  assert.match(build, /"package\.json", "browser\.js", "index\.js", "wrapper\.mjs"/);
+  assert.doesNotMatch(build, /cp\(resolve\("node_modules\/ws"\).*recursive: true/s);
 });
 
 test("watcher recovery decision self-test passes in PowerShell", async (context) => {

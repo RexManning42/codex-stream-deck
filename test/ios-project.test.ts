@@ -251,6 +251,35 @@ test("empty iPhone agent keys render one centered plus", async () => {
   assert.match(body, /if let agent[\s\S]*else \{[\s\S]*Image\(systemName: "plus"\)/);
 });
 
+test("iPhone header keeps the Codex Micro wordmark on one line", async () => {
+  const dashboard = await readFile(
+    new URL("../ios/CodexDeckMobile/Views/DashboardView.swift", import.meta.url), "utf8");
+  const header = dashboard.slice(dashboard.indexOf("private struct HeaderView"), dashboard.indexOf("private struct HeaderGlassActions"));
+  assert.match(header, /Text\("CODEX"\)[\s\S]*?\.lineLimit\(1\)/);
+  assert.match(header, /Text\("MICRO"\)[\s\S]*?\.lineLimit\(1\)/);
+  assert.match(header, /\.fixedSize\(horizontal: true, vertical: false\)/);
+});
+
+test("iPhone app icon supplies opaque light, dark, and tinted 1024px appearances", async () => {
+  const iconRoot = new URL(
+    "../ios/CodexDeckMobile/Assets.xcassets/AppIcon.appiconset/", import.meta.url);
+  const manifest = JSON.parse(await readFile(new URL("Contents.json", iconRoot), "utf8")) as {
+    images: Array<{ filename?: string; appearances?: Array<{ value?: string }> }>;
+  };
+  const files = new Map(manifest.images.map((entry) => [
+    entry.appearances?.[0]?.value ?? "light", entry.filename
+  ]));
+  assert.deepEqual([...files.keys()], ["light", "dark", "tinted"]);
+  for (const filename of files.values()) {
+    assert.ok(filename);
+    const png = await readFile(new URL(filename!, iconRoot));
+    assert.equal(png.toString("ascii", 1, 4), "PNG");
+    assert.equal(png.readUInt32BE(16), 1024);
+    assert.equal(png.readUInt32BE(20), 1024);
+    assert.equal(png[25], 2, `${filename} must be opaque RGB without alpha`);
+  }
+});
+
 test("iPhone attention center baselines snapshots, persists events, and keeps alerts optional", async () => {
   const [models, store, center, settings, notifications, app, dashboard] = await Promise.all([
     readFile(new URL("../ios/CodexDeckMobile/Models/AttentionEvents.swift", import.meta.url), "utf8"),

@@ -52,6 +52,48 @@ test("recent local rollout tails expose structural working and completion state 
   }
 });
 
+test("current response_item records keep a long-running Codex task working after task_started leaves the tail", async () => {
+  const root = await mkdtemp(join(tmpdir(), "codex-deck-current-presence-"));
+  try {
+    const threadId = "10000000-0000-4000-8000-000000000009";
+    const path = join(root, `rollout-now-${threadId}.jsonl`);
+    await writeFile(path,
+      '{"type":"event_msg","payload":{"type":"task_started"}}\n' +
+      `${"x".repeat(520 * 1024)}\n` +
+      '{"timestamp":"2026-07-21T20:00:00.000Z","type":"response_item","payload":{"type":"reasoning"}}\n' +
+      '{"timestamp":"2026-07-21T20:00:01.000Z","type":"response_item","payload":{"type":"custom_tool_call","name":"exec"}}\n');
+    const now = Date.parse("2026-07-21T20:00:02.000Z");
+    const annotated = await new CodexSessionOwnershipIndex([root], 0).annotate(
+      snapshotFor(threadId, false), now);
+    const session = annotated.hostSessions?.find((candidate) => candidate.threadId === threadId);
+    assert.equal(session?.status, "working");
+    assert.equal(session?.activityAt, Date.parse("2026-07-21T20:00:01.000Z"));
+    assert.equal(annotated.slots[0]!.status, "working");
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("an old completion uses its event timestamp and cannot flash as newly complete after a file touch", async () => {
+  const root = await mkdtemp(join(tmpdir(), "codex-deck-stale-completion-"));
+  try {
+    const threadId = "10000000-0000-4000-8000-000000000010";
+    await writeFile(join(root, `rollout-now-${threadId}.jsonl`),
+      '{"timestamp":"2026-07-21T19:00:00.000Z","type":"event_msg","payload":{"type":"task_started"}}\n' +
+      '{"timestamp":"2026-07-21T19:01:00.000Z","type":"event_msg","payload":{"type":"task_complete"}}\n' +
+      '{"timestamp":"2026-07-21T20:00:00.000Z","type":"event_msg","payload":{"type":"thread_settings_applied"}}\n');
+    const now = Date.parse("2026-07-21T20:00:01.000Z");
+    const annotated = await new CodexSessionOwnershipIndex([root], 0).annotate(
+      snapshotFor(threadId, false), now);
+    const session = annotated.hostSessions?.find((candidate) => candidate.threadId === threadId);
+    assert.equal(session?.status, "idle");
+    assert.equal(session?.activityAt, Date.parse("2026-07-21T19:01:00.000Z"));
+    assert.equal(annotated.slots[0]!.status, "idle");
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("rollout token counts expose bounded per-thread context usage without task content", async () => {
   const root = await mkdtemp(join(tmpdir(), "codex-deck-context-"));
   try {

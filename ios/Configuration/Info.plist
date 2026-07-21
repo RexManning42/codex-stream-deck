@@ -18,10 +18,40 @@
 	<string>$(MARKETING_VERSION)</string>
 	<key>CFBundleVersion</key>
 	<string>$(CURRENT_PROJECT_VERSION)</string>
+	<key>BGTaskSchedulerPermittedIdentifiers</key>
+	<array>
+		<string>$(CODEX_DECK_BUNDLE_ID).widget-refresh</string>
+	</array>
+	<key>CodexDeckAppGroup</key>
+	<string>$(CODEX_DECK_APP_GROUP)</string>
+	<key>CodexDeckWidgetRefreshIdentifier</key>
+	<string>$(CODEX_DECK_BUNDLE_ID).widget-refresh</string>
 	<key>LSRequiresIPhoneOS</key>
 	<true/>
+	<key>NSSupportsLiveActivities</key>
+	<true/>
 	<key>NSLocalNetworkUsageDescription</key>
-	<string>Codex Deck connects to your authenticated Mac and Windows nodes over your private Tailscale network.</string>
+	<string>Codex Deck discovers and securely connects to your paired Mac and Windows computers on the local network.</string>
+	<key>NSBonjourServices</key>
+	<array>
+		<string>_codexdeck._tcp</string>
+	</array>
+	<key>NSAppTransportSecurity</key>
+	<dict>
+		<key>NSAllowsLocalNetworking</key>
+		<true/>
+	</dict>
+	<key>CFBundleURLTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleURLName</key>
+			<string>$(CODEX_DECK_BUNDLE_ID).pairing</string>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>codexdeck</string>
+			</array>
+		</dict>
+	</array>
 	<key>UIApplicationSceneManifest</key>
 	<dict>
 		<key>UIApplicationSupportsMultipleScenes</key>
@@ -32,6 +62,10 @@
 	<key>UIRequiredDeviceCapabilities</key>
 	<array>
 		<string>arm64</string>
+	</array>
+	<key>UIBackgroundModes</key>
+	<array>
+		<string>fetch</string>
 	</array>
 	<key>UISupportedInterfaceOrientations</key>
 	<array>

@@ -41,11 +41,11 @@ const SURFACES: Record<ThemeMode, SurfacePalette> = {
   }
 };
 
-export function renderAgentKey(slot: number, title: string, status: AgentVisualStatus, selected = false, phase = 0, theme: ThemeMode = "light", hostBadge?: string, hostHealth: HostHealthState = "ready"): string {
-  return toDataUrl(renderAgentSvg(slot, title, status, selected, phase, theme, hostBadge, hostHealth));
+export function renderAgentKey(slot: number, title: string, status: AgentVisualStatus, selected = false, phase = 0, theme: ThemeMode = "light", hostBadge?: string, hostHealth: HostHealthState = "ready", contextUsedPercent?: number, showContextRing = true): string {
+  return toDataUrl(renderAgentSvg(slot, title, status, selected, phase, theme, hostBadge, hostHealth, contextUsedPercent, showContextRing));
 }
 
-export function renderAgentSvg(_slot: number, title: string, status: AgentVisualStatus, selected = false, phase = 0, theme: ThemeMode = "light", hostBadge?: string, hostHealth: HostHealthState = "ready"): string {
+export function renderAgentSvg(_slot: number, title: string, status: AgentVisualStatus, selected = false, phase = 0, theme: ThemeMode = "light", hostBadge?: string, hostHealth: HostHealthState = "ready", contextUsedPercent?: number, showContextRing = true): string {
   const surface = SURFACES[theme];
   const color = SIGNAL_COLORS[theme][status];
   const [line1, line2] = splitTitle(title);
@@ -78,6 +78,7 @@ export function renderAgentSvg(_slot: number, title: string, status: AgentVisual
     <rect x="12" y="12" width="120" height="120" rx="12" fill="url(#frost)" stroke="${surface.innerBorder}" stroke-width="1" opacity="${theme === "dark" ? ".86" : ".72"}"/>
     <path d="M18 21C46 12 99 12 126 23" fill="none" stroke="${surface.sheen}" stroke-width="6" stroke-linecap="round" opacity="${theme === "dark" ? "0" : ".68"}"/>
     ${renderHostHealthMark(hostHealth, theme)}
+    ${hostHealth === "ready" && showContextRing ? renderContextRing(contextUsedPercent, theme, surface) : ""}
     ${hostBadge ? `<g data-agent-host="${escapeXml(hostBadge)}"><rect x="108" y="16" width="20" height="18" rx="7" fill="${surface.title}" fill-opacity=".11"/><text x="118" y="29" text-anchor="middle" font-family="Bahnschrift, Segoe UI, Arial, sans-serif" font-size="11" font-weight="700" fill="${surface.title}" fill-opacity=".82">${escapeXml(hostBadge)}</text></g>` : ""}
     <g font-family="Bahnschrift, Segoe UI Variable Display, Segoe UI, Arial, sans-serif">${titleMarkup}</g>
     ${statusMark}
@@ -323,4 +324,23 @@ function renderHostHealthMark(health: HostHealthState, theme: ThemeMode): string
     return `<g data-agent-host-health="offline" fill="${color}"><circle cx="25" cy="25" r="11"/><path d="M20 20l10 10m0-10L20 30" fill="none" stroke="#FFFFFF" stroke-width="3" stroke-linecap="round"/></g>`;
   }
   return `<g data-agent-host-health="connecting" fill="${SIGNAL_COLORS[theme].empty}"><circle cx="18" cy="25" r="2.5"/><circle cx="25" cy="25" r="2.5"/><circle cx="32" cy="25" r="2.5"/></g>`;
+}
+
+function renderContextRing(
+  value: number | undefined,
+  theme: ThemeMode,
+  surface: SurfacePalette
+): string {
+  if (value == null || !Number.isFinite(value)) return "";
+  const percent = Math.max(0, Math.min(100, value));
+  const radius = 9;
+  const circumference = 2 * Math.PI * radius;
+  const dash = circumference * percent / 100;
+  const color = percent >= 92
+    ? SIGNAL_COLORS[theme].error
+    : percent >= 80 ? SIGNAL_COLORS[theme].input : surface.title;
+  return `<g data-context-used="${Math.round(percent)}" aria-label="Context usage ${Math.round(percent)} percent">
+    <circle cx="25" cy="25" r="${radius}" fill="${surface.keyMiddle}" fill-opacity=".58" stroke="${surface.title}" stroke-width="3" stroke-opacity=".14"/>
+    <circle cx="25" cy="25" r="${radius}" fill="none" stroke="${color}" stroke-width="3" stroke-linecap="round" stroke-dasharray="${dash.toFixed(2)} ${circumference.toFixed(2)}" transform="rotate(-90 25 25)"/>
+  </g>`;
 }

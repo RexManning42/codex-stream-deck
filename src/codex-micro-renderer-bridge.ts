@@ -38,6 +38,24 @@ type CdpResponse = {
   error?: { message?: string };
 };
 
+export type AgentDispatchPlan =
+  | { kind: "native"; slot: number; threadKey: string }
+  | { kind: "direct"; threadKey: string };
+
+export function resolveAgentDispatch(
+  snapshot: MicroSnapshot,
+  requestedSlot: number,
+  expectedThreadKey?: string
+): AgentDispatchPlan {
+  const requested = snapshot.slots.find((item) => item.id === requestedSlot);
+  const threadKey = expectedThreadKey ?? requested?.threadKey ?? null;
+  if (!threadKey) throw new Error("The selected Codex task has no stable thread identity.");
+  const current = snapshot.slots.find((item) => item.threadKey === threadKey);
+  return current
+    ? { kind: "native", slot: current.id, threadKey }
+    : { kind: "direct", threadKey };
+}
+
 const execFileAsync = promisify(execFile);
 const PORT_FILE = join(codexDeckStateRoot(), "codex-micro-bridge.json");
 const DEVICE_STATE = {
@@ -207,7 +225,10 @@ const SNAPSHOT_EXPRESSION = `(async () => {
       const lastRefreshAttempt = Number(globalThis[refreshKey]) || 0;
       if (query && typeof query.fetch === 'function' && now - dataUpdatedAt >= 15000 && now - lastRefreshAttempt >= 15000) {
         globalThis[refreshKey] = now;
-        try { await query.fetch(); } catch {}
+        // Rate-limit refresh is network-backed and must never hold agent status,
+        // selection, or lighting behind its response. A later snapshot reads
+        // the refreshed query cache once this best-effort request completes.
+        try { Promise.resolve(query.fetch()).catch(() => {}); } catch {}
       }
       const data = query?.state?.data;
       const rateLimit = data?.rate_limit;
@@ -273,12 +294,17 @@ const SNAPSHOT_EXPRESSION = `(async () => {
   const theme = explicitDark || (!explicitLight && (luminance != null ? luminance < 0.42 : matchMedia('(prefers-color-scheme: dark)').matches))
     ? 'dark'
     : 'light';
-  const activeThreadKey = document.querySelector('[data-app-action-sidebar-thread-id][aria-current="page"]')
-    ?.getAttribute('data-app-action-sidebar-thread-id')
-    ?? document.querySelector('[data-above-composer-conversation-id]')?.getAttribute('data-above-composer-conversation-id')
+  const activeThreadElement = document.querySelector('[data-app-action-sidebar-thread-id][data-app-action-sidebar-thread-active="true"]')
+    ?? document.querySelector('[data-app-action-sidebar-thread-id][aria-current="page"]');
+  const activeThreadKey = document.querySelector('[data-above-composer-conversation-id]')
+    ?.getAttribute('data-above-composer-conversation-id')
+    ?? activeThreadElement?.getAttribute('data-app-action-sidebar-thread-id')
     ?? undefined;
+  const activeThreadTitle = activeThreadElement
+    ? (activeThreadElement.getAttribute('aria-label') ?? activeThreadElement.textContent ?? '').trim().slice(0, 240) || undefined
+    : undefined;
 
-  return { slots, activeThreadKey, layout, agentSource, lightingAutoOff, theme, ...(usage ? { usage } : {}) };
+  return { slots, activeThreadKey, activeThreadTitle, layout, agentSource, lightingAutoOff, theme, ...(usage ? { usage } : {}) };
 })()`;
 
 export class CodexMicroRendererBridge {
@@ -307,16 +333,57 @@ export class CodexMicroRendererBridge {
 
   async sendAgent(slot: number, act: 0 | 1, expectedThreadKey?: string): Promise<void> {
     if (!Number.isInteger(slot) || slot < 0 || slot > 5) throw new Error(`Ungültiger Micro-Agent-Slot: ${slot}`);
-    const snapshot = this.lastSnapshot ?? await this.refresh();
-    const assignment = snapshot.slots.find((item) => item.id === slot);
-    const threadKey = expectedThreadKey ?? assignment?.threadKey ?? null;
-    if (expectedThreadKey && assignment?.threadKey !== expectedThreadKey) {
-      this.log(`Agent slot ${slot + 1} changed before dispatch; routing the preserved task identity.`);
+    const snapshot = act === 1 ? await this.refresh() : this.lastSnapshot ?? await this.refresh();
+    const plan = resolveAgentDispatch(snapshot, slot, expectedThreadKey);
+    if (plan.kind === "native") {
+      if (plan.slot !== slot) {
+        this.log(`Agent slot ${slot + 1} changed before dispatch; using current native slot ${plan.slot + 1}.`);
+      }
+      await this.dispatch("codex-micro-hid-event", {
+        event: { key: `AG0${plan.slot}`, act, slot: plan.slot, threadKey: plan.threadKey }
+      }, "codex-micro-hid-event");
+      if (act === 0) return;
+    } else {
+      if (act === 0) return;
+      this.log(`Task ${plan.threadKey} is outside this host's six native Micro slots; opening its exact thread identity.`);
     }
-    await this.dispatch("codex-micro-hid-event", {
-      event: { key: `AG0${slot}`, act, slot, threadKey }
-    }, "codex-micro-hid-event");
-    if (act === 1 && threadKey) this.sessionOwnership.markOpened(threadKey);
+    await this.ensureThreadActivated(plan.threadKey);
+    this.sessionOwnership.markOpened(plan.threadKey);
+  }
+
+  private async ensureThreadActivated(threadKey: string): Promise<void> {
+    const result = await this.evaluate<"active" | "opened" | "missing" | "failed">(`(async () => {
+      const threadKey = ${JSON.stringify(threadKey)};
+      const activeThreadKey = () => document.querySelector('[data-above-composer-conversation-id]')
+        ?.getAttribute('data-above-composer-conversation-id')
+        ?? document.querySelector('[data-app-action-sidebar-thread-id][data-app-action-sidebar-thread-active="true"]')
+          ?.getAttribute('data-app-action-sidebar-thread-id')
+        ?? document.querySelector('[data-app-action-sidebar-thread-id][aria-current="page"]')
+          ?.getAttribute('data-app-action-sidebar-thread-id')
+        ?? null;
+      const waitForActive = async (duration) => {
+        const deadline = Date.now() + duration;
+        while (Date.now() < deadline) {
+          if (activeThreadKey() === threadKey) return true;
+          await new Promise((resolve) => setTimeout(resolve, 25));
+        }
+        return activeThreadKey() === threadKey;
+      };
+      if (await waitForActive(250)) return 'active';
+      const item = [...document.querySelectorAll('[data-app-action-sidebar-thread-id]')]
+        .find((element) => element.getAttribute('data-app-action-sidebar-thread-id') === threadKey);
+      if (!item) return 'missing';
+      const selector = 'button, a, [role="button"], [role="link"]';
+      const clickable = item.matches(selector) ? item : item.querySelector(selector) ?? item.closest(selector) ?? item;
+      if (typeof clickable.click === 'function') clickable.click();
+      else clickable.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, view: window }));
+      return await waitForActive(1500) ? 'opened' : 'failed';
+    })()`);
+    if (result === "active" || result === "opened") return;
+    if (result === "missing") {
+      throw new Error("The exact Codex task is not present in this host's loaded sidebar. Open or pin it once in Codex, then retry.");
+    }
+    throw new Error("Codex received the task selection but did not activate the requested thread.");
   }
 
   async sendAction(slot: MicroActionSlot, act: 0 | 1): Promise<void> {

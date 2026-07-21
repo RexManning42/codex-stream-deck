@@ -16,7 +16,7 @@ The same Stream Deck plugin package works in all three modes. Install only the l
 | Windows only | Windows | Local Windows Codex | [Windows setup](docs/WINDOWS.md) |
 | Mac only | macOS | Local Mac Codex | [macOS setup](docs/MACOS.md) |
 | Windows + Mac | Windows | Both apps; six agents are merged | [Multi-host setup](docs/MULTI_HOST.md) |
-| iPhone companion | iOS | Private Mac + Windows nodes | [iPhone app](docs/IOS.md) |
+| iPhone companion | iOS 17+ | Private Mac and/or Windows nodes | [iPhone app](docs/IOS.md) · [Install from source](docs/IOS_INSTALL.md) |
 
 Windows-only and Mac-only mode have no relay, no second computer dependency, and no host badges. Multi-host mode is optional and can be disabled without changing the local bridge on either machine.
 
@@ -35,7 +35,7 @@ Windows-only and Mac-only mode have no relay, no second computer dependency, and
 - Optional local loading of official keycap SVGs; those protected files are never included in this repository or its releases.
 - Optional authenticated SSH/Tailscale relay for one Stream Deck controlling Windows and Mac Codex together.
 - Per-host health on the Windows/Mac target key, with last-known agent tiles visibly marked when native desktop signals are uncertain or the relay is offline.
-- Native SwiftUI iPhone companion with dual-host agents, usage, reset credits, and authenticated Micro controls over private Tailscale HTTPS.
+- Native SwiftUI iPhone companion with dual-host agents, usage, reset credits, and authenticated Micro controls over pinned-TLS Nearby Wi-Fi or private Tailscale HTTPS.
 
 ## Requirements
 
@@ -56,6 +56,11 @@ Other Stream Deck models may work, but the included layout and physical-device t
 3. Follow [Windows](docs/WINDOWS.md), [macOS](docs/MACOS.md), or [Windows + Mac](docs/MULTI_HOST.md).
 4. In **Codex Settings > Codex Micro**, choose the agent source, action assignments, joystick actions, and encoder behavior.
 5. Build the two Stream Deck pages below.
+
+The iPhone companion is currently source-only and installed with Xcode. It has
+no CocoaPods or third-party Swift package dependencies. Nearby pairing works on
+the same private Wi-Fi without Tailscale; add Tailscale when you want private
+control away from home. See the [beginner installation guide](docs/IOS_INSTALL.md).
 
 In Windows + Mac mode, choose the same agent-source mode in both Codex apps when you want both native Pinned lists or both sets of Individual assignments to contribute. Pinned tasks are interleaved fairly. For Individual assignments, the Stream Deck computer wins when both apps assign different tasks to one button, while the other computer fills empty slots. Mirrored copies of the same task are shown only once. See [Multi-host behavior](docs/MULTI_HOST.md#agent-source-modes).
 
@@ -131,7 +136,7 @@ No virtual HID driver is installed and no Codex application file is patched. See
 - The Codex debug endpoint remains loopback-only and is never the multi-host relay endpoint.
 - CDP is privileged: another untrusted process running as the same local user could try to access it.
 - Codex Deck has no telemetry, cloud service, or update service.
-- Single-host mode reads no rollout data. Multi-host mode reads only exact local rollout **filenames**, never their contents, to distinguish a task's owning desktop from a cloud/SSH mirror.
+- Codex Deck reads exact local rollout filenames for ownership and a bounded recent tail for structural status tags plus numeric `token_count` fields. It does not parse or relay prompts, responses, project names, or other conversation content.
 - Optional SVGs stay in the user-local icons directory and are never uploaded.
 - Multi-host mode accepts only authenticated, typed Codex Deck commands over SSH or Tailscale; wildcard and arbitrary public-IP listeners are rejected.
 - Private relay tokens, local host state, logs, and personal paths are excluded by the release audit.
@@ -142,11 +147,12 @@ Do not use the launcher while running untrusted local software. See [SECURITY.md
 
 The current build was locally validated against:
 
-- Codex for Windows `26.715.4045.0`
-- Codex for macOS `26.715.31925`
+- Codex for Windows `26.715.8383.0`
+- Codex for macOS `26.715.61943`
 - Stream Deck `7.4.2.22730`
 - Windows `10.0.26220.0`
 - Node.js `24.13.0`
+- iPhone `iOS 27.0` (physical-device build and tests)
 - Standard 15-key Stream Deck MK.2
 
 The Windows physical-device path and the Windows+Mac relay were exercised on the real setup. The macOS launcher, watcher, native bridge, and plugin package are validated; a Stream Deck physically attached to the Mac has not yet been hardware-tested. These are tested versions, not strict maximums.

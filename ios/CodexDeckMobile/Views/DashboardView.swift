@@ -3,20 +3,28 @@ import SwiftUI
 struct DashboardView: View {
   @Environment(DashboardStore.self) private var store
   @State private var resetConfirmation = false
+  @State private var showingAllKeys = false
+  @State private var editingKeySlot: DeviceKeySlot?
 
   var body: some View {
     @Bindable var store = store
+    let agents = store.agents
+    let hasAttention = agents.contains(where: \.isAttention)
     ZStack(alignment: .bottom) {
-      CodexTheme.canvas.ignoresSafeArea()
+      CodexBackdrop(accent: hasAttention ? CodexTheme.orange : CodexTheme.blue)
+        .ignoresSafeArea()
       ScrollView {
         LazyVStack(spacing: 22) {
-          HeaderView()
+          HeaderView { showingAllKeys = true }
           if store.profiles.isEmpty {
             PairingWelcome()
           } else {
+            CodexMicroDeviceView(
+              placements: store.mobileAgentPlacements,
+              editKey: { editingKeySlot = $0 },
+              showAgent: { store.presentAgent($0) })
+            ActiveChatsView()
             UsageHero(resetConfirmation: $resetConfirmation)
-            AgentGrid()
-            MicroConsole()
           }
           Color.clear.frame(height: 16)
         }
@@ -24,14 +32,20 @@ struct DashboardView: View {
         .padding(.top, 8)
       }
       .scrollIndicators(.hidden)
+      .defaultScrollAnchor(.top)
 
-      if let toast = store.toast {
+      if let receipt = store.visibleCommandReceipt {
+        CommandReceiptHUD(receipt: receipt)
+          .padding(.horizontal, 18)
+          .padding(.bottom, 12)
+          .transition(.move(edge: .bottom).combined(with: .opacity))
+      } else if let toast = store.toast {
         Text(toast.message)
           .font(.subheadline.weight(.semibold))
           .foregroundStyle(.white)
           .padding(.horizontal, 16)
           .padding(.vertical, 11)
-          .background(toast.kind == .success ? CodexTheme.ink : CodexTheme.red, in: Capsule())
+          .background(toast.kind == .success ? CodexTheme.control : CodexTheme.red, in: Capsule())
           .shadow(radius: 12, y: 6)
           .padding(.bottom, 12)
           .transition(.move(edge: .bottom).combined(with: .opacity))
@@ -39,6 +53,16 @@ struct DashboardView: View {
     }
     .tint(CodexTheme.ink)
     .sheet(isPresented: $store.showingSettings) { SettingsView() }
+    .sheet(isPresented: $store.showingAttentionCenter) { AttentionCenterView() }
+    .sheet(isPresented: $showingAllKeys) { AllKeysView() }
+    .sheet(item: $editingKeySlot) { KeycapPickerView(slot: $0) }
+    .sheet(item: $store.presentedAgentReference) { reference in
+      AgentDetailView(reference: reference)
+        .presentationDetents([.medium, .large])
+        .presentationDragIndicator(.visible)
+        .presentationCornerRadius(34)
+        .presentationBackground(.clear)
+    }
     .confirmationDialog(
       "Use one rate-limit reset?", isPresented: $resetConfirmation, titleVisibility: .visible
     ) {
@@ -47,14 +71,79 @@ struct DashboardView: View {
       Text("This sends the same authenticated reset command as the Stream Deck button.")
     }
     .animation(.snappy, value: store.toast)
+    .animation(.snappy, value: store.visibleCommandReceipt)
+    .sensoryFeedback(.impact(weight: .medium), trigger: store.presentedAgentReference?.threadIdentity)
+    .sensoryFeedback(.success, trigger: store.commandSuccessPulse)
+    .sensoryFeedback(.error, trigger: store.commandErrorPulse)
+  }
+}
+
+private struct CommandReceiptHUD: View {
+  let receipt: CommandReceipt
+
+  var body: some View {
+    HStack(spacing: 12) {
+      statusIcon
+        .frame(width: 28, height: 28)
+      VStack(alignment: .leading, spacing: 2) {
+        Text(receipt.title)
+          .font(.subheadline.weight(.bold))
+          .lineLimit(1)
+        Text(receipt.detail)
+          .font(.caption)
+          .foregroundStyle(CodexTheme.secondary)
+          .lineLimit(2)
+      }
+      Spacer(minLength: 6)
+      Text(receipt.hostPlatform.shortLabel)
+        .font(.caption2.weight(.black))
+        .foregroundStyle(.white)
+        .frame(width: 25, height: 25)
+        .background(tint, in: Circle())
+    }
+    .padding(.horizontal, 15)
+    .padding(.vertical, 12)
+    .codexGlassSurface(cornerRadius: 21, tint: tint.opacity(0.1), interactive: false)
+    .accessibilityElement(children: .combine)
+    .accessibilityLabel("\(receipt.title), \(receipt.detail)")
+  }
+
+  @ViewBuilder
+  private var statusIcon: some View {
+    switch receipt.stage {
+    case .sending:
+      ProgressView().tint(tint)
+    case .hostConfirmed:
+      Image(systemName: "arrow.up.circle.fill")
+        .font(.title3).foregroundStyle(tint)
+    case .stateConfirmed:
+      Image(systemName: "checkmark.circle.fill")
+        .font(.title3).foregroundStyle(tint)
+    case .warning:
+      Image(systemName: "exclamationmark.circle.fill")
+        .font(.title3).foregroundStyle(tint)
+    case .failed:
+      Image(systemName: "xmark.circle.fill")
+        .font(.title3).foregroundStyle(tint)
+    }
+  }
+
+  private var tint: Color {
+    switch receipt.stage {
+    case .sending, .hostConfirmed: CodexTheme.blue
+    case .stateConfirmed: CodexTheme.green
+    case .warning: CodexTheme.orange
+    case .failed: CodexTheme.red
+    }
   }
 }
 
 private struct HeaderView: View {
   @Environment(DashboardStore.self) private var store
+  let showAllKeys: () -> Void
 
   var body: some View {
-    HStack(spacing: 12) {
+    HStack(spacing: 7) {
       HStack(alignment: .firstTextBaseline, spacing: 8) {
         Text("CODEX")
           .font(.system(size: 28, weight: .black, design: .rounded))
@@ -65,40 +154,125 @@ private struct HeaderView: View {
           .foregroundStyle(CodexTheme.secondary)
       }
       Spacer()
-      ConnectionPill()
-      Button {
-        store.showingSettings = true
-      } label: {
-        Image(systemName: "gearshape.fill")
-          .font(.system(size: 18, weight: .semibold))
-          .frame(width: 42, height: 42)
-          .background(.white.opacity(0.72), in: Circle())
+      ConnectionLight()
+      HeaderHostMenu()
+      if #available(iOS 26.0, *) {
+        GlassEffectContainer(spacing: 8) {
+          HeaderGlassActions(showAllKeys: showAllKeys)
+        }
+        .overlay(alignment: .topLeading) { AttentionBadge() }
+      } else {
+        HeaderGlassActions(showAllKeys: showAllKeys)
+          .overlay(alignment: .topLeading) { AttentionBadge() }
       }
-      .accessibilityLabel("Connection settings")
     }
     .foregroundStyle(CodexTheme.ink)
   }
 }
 
-private struct ConnectionPill: View {
+private struct HeaderGlassActions: View {
+  @Environment(DashboardStore.self) private var store
+  let showAllKeys: () -> Void
+
+  var body: some View {
+    HStack(spacing: 7) {
+      Button {
+        store.showingAttentionCenter = true
+      } label: {
+        Image(systemName: store.unreadAttentionCount > 0 ? "bell.fill" : "bell")
+          .font(.system(size: 15, weight: .semibold))
+          .frame(width: 36, height: 36)
+          .codexGlassSurface(
+            cornerRadius: 18,
+            tint: store.unreadAttentionCount > 0 ? CodexTheme.orange.opacity(0.12) : nil,
+            interactive: true)
+      }
+      .buttonStyle(.plain)
+      .accessibilityLabel(
+        store.unreadAttentionCount == 0
+          ? "Attention center" : "Attention center, \(store.unreadAttentionCount) unread")
+      Button(action: showAllKeys) {
+        Image(systemName: "square.grid.3x3.fill")
+          .font(.system(size: 15, weight: .semibold))
+          .frame(width: 36, height: 36)
+          .codexGlassSurface(cornerRadius: 18, interactive: true)
+      }
+      .buttonStyle(.plain)
+      .accessibilityLabel("All Codex keys")
+      Button {
+        store.showingSettings = true
+      } label: {
+        Image(systemName: "gearshape.fill")
+          .font(.system(size: 16, weight: .semibold))
+          .frame(width: 36, height: 36)
+          .codexGlassSurface(cornerRadius: 18, interactive: true)
+      }
+      .buttonStyle(.plain)
+      .accessibilityLabel("Connection settings")
+    }
+  }
+}
+
+private struct AttentionBadge: View {
+  @Environment(DashboardStore.self) private var store
+
+  var body: some View {
+    if store.unreadAttentionCount > 0 {
+      Text(store.unreadAttentionCount > 9 ? "9+" : "\(store.unreadAttentionCount)")
+        .font(.system(size: 8, weight: .black, design: .rounded))
+        .foregroundStyle(.white)
+        .padding(.horizontal, 4)
+        .frame(minWidth: 15, minHeight: 15)
+        .background(CodexTheme.red, in: Capsule())
+        .offset(x: 25, y: -3)
+        .allowsHitTesting(false)
+        .accessibilityHidden(true)
+        .zIndex(100)
+    }
+  }
+}
+
+private struct ConnectionLight: View {
   @Environment(DashboardStore.self) private var store
 
   var body: some View {
     let ready = store.connectedCount
-    HStack(spacing: 6) {
-      Circle()
-        .fill(
-          ready == store.expectedCount && ready > 0
-            ? CodexTheme.green : ready > 0 ? CodexTheme.orange : CodexTheme.red
-        )
-        .frame(width: 8, height: 8)
-      Text(store.expectedCount == 0 ? "SET UP" : "\(ready)/\(store.expectedCount)")
-        .font(.caption2.weight(.bold))
-        .monospacedDigit()
+    Circle()
+      .fill(
+        ready == store.expectedCount && ready > 0
+          ? CodexTheme.green : ready > 0 ? CodexTheme.orange : CodexTheme.red
+      )
+      .frame(width: 11, height: 11)
+      .shadow(color: CodexTheme.green.opacity(ready > 0 ? 0.35 : 0), radius: 5)
+      .accessibilityLabel("\(ready) of \(store.expectedCount) computers connected")
+  }
+}
+
+private struct HeaderHostMenu: View {
+  @Environment(DashboardStore.self) private var store
+
+  var body: some View {
+    let hosts = Dictionary(grouping: store.nodes.values.compactMap(\.host), by: \.hostId)
+      .compactMap { $0.value.first }
+      .sorted { $0.platform.rawValue < $1.platform.rawValue }
+    Menu {
+      ForEach(hosts, id: \.hostId) { host in
+        Button {
+          store.selectHost(host)
+        } label: {
+          Label(
+            host.hostName,
+            systemImage: store.selectedHost?.hostId == host.hostId ? "checkmark.circle.fill" : "circle")
+        }
+      }
+    } label: {
+      Text(store.selectedHost?.platform.shortLabel ?? "–")
+        .font(.caption2.weight(.black))
+        .foregroundStyle(.white)
+        .frame(width: 30, height: 30)
+        .background(CodexTheme.control, in: Circle())
     }
-    .padding(.horizontal, 10)
-    .frame(height: 32)
-    .background(.white.opacity(0.72), in: Capsule())
+    .accessibilityLabel("Control computer")
   }
 }
 
@@ -112,7 +286,7 @@ private struct PairingWelcome: View {
       Text("Bring Codex Micro with you")
         .font(.title2.bold())
       Text(
-        "Pair your Mac and Windows nodes over Tailscale. Status stays fast, commands stay authenticated, and Chrome DevTools never leaves either computer."
+        "Pair your Mac or Windows computer over nearby Wi-Fi, then add Tailscale when you want secure access away from home. Chrome DevTools never leaves the computer."
       )
       .font(.subheadline)
       .foregroundStyle(CodexTheme.secondary)
@@ -124,7 +298,7 @@ private struct PairingWelcome: View {
     }
     .padding(28)
     .frame(maxWidth: .infinity)
-    .background(.white.opacity(0.75), in: RoundedRectangle(cornerRadius: 30, style: .continuous))
+    .codexGlassSurface(cornerRadius: 30, tint: .white.opacity(0.08))
   }
 }
 
@@ -161,7 +335,7 @@ private struct UsageHero: View {
       }
     }
     .padding(20)
-    .background(.white.opacity(0.76), in: RoundedRectangle(cornerRadius: 28, style: .continuous))
+    .codexGlassSurface(cornerRadius: 28, tint: .white.opacity(0.08))
   }
 
   private func freshness(_ timestamp: Double?) -> String? {
@@ -266,10 +440,10 @@ private struct AgentCard: View {
             Image(systemName: statusSymbol).font(.system(size: 15, weight: .bold))
           }
           Spacer()
-          Text(agent.host.platform.shortLabel)
+          Text(agent.originPlatform.shortLabel)
             .font(.caption2.weight(.black))
             .frame(width: 23, height: 23)
-            .background(hostState == .ready ? CodexTheme.ink : CodexTheme.red, in: Circle())
+            .background(hostState == .ready ? CodexTheme.control : CodexTheme.red, in: Circle())
             .foregroundStyle(.white)
         }
         Text(agent.title)
@@ -284,6 +458,11 @@ private struct AgentCard: View {
               hostState == .offline ? CodexTheme.red : CodexTheme.secondary
             )
           Spacer()
+          if agent.originPlatform != agent.host.platform {
+            Text("VIA \(agent.host.platform.shortLabel)")
+              .font(.system(size: 7, weight: .black))
+              .foregroundStyle(CodexTheme.secondary)
+          }
           if agent.selected { Image(systemName: "viewfinder").font(.caption2) }
         }
       }
@@ -421,7 +600,7 @@ private struct HostPicker: View {
           .font(.caption2.weight(.black))
           .frame(width: 28, height: 28)
           .background(
-            store.selectedHost?.hostId == host.hostId ? CodexTheme.ink : .white.opacity(0.7),
+            store.selectedHost?.hostId == host.hostId ? CodexTheme.control : CodexTheme.key,
             in: Circle()
           )
           .foregroundStyle(store.selectedHost?.hostId == host.hostId ? .white : CodexTheme.ink)

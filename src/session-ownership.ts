@@ -10,7 +10,7 @@ export class CodexSessionOwnershipIndex {
   private sessionIds = new Set<string>();
   private recentSessions: HostSessionPresence[] = [];
   private acknowledgedCompletions = new Map<string, number>();
-  private activeSessions = new Set<string>();
+  private contextParsedSessions = new Set<string>();
   private refreshedAt = 0;
   private refreshInFlight?: Promise<void>;
 
@@ -20,30 +20,42 @@ export class CodexSessionOwnershipIndex {
   ) {}
 
   async annotate(snapshot: MicroSnapshot, now = Date.now()): Promise<MicroSnapshot> {
-    await this.refreshIfNeeded(now);
+    const trackedSessions = new Set(snapshot.slots
+      .map((slot) => sessionIdFromThreadKey(slot.threadKey))
+      .filter((sessionId): sessionId is string => sessionId != null));
+    const activeSessionId = sessionIdFromThreadKey(snapshot.activeThreadKey ?? null);
+    if (activeSessionId) trackedSessions.add(activeSessionId);
+    await this.refreshIfNeeded(now, trackedSessions);
     const selectedSessions = new Set(snapshot.slots
       .filter((slot) => slot.selected)
       .map((slot) => sessionIdFromThreadKey(slot.threadKey))
       .filter((sessionId): sessionId is string => sessionId != null));
-    const activeSessionId = sessionIdFromThreadKey(snapshot.activeThreadKey ?? null);
     if (activeSessionId) selectedSessions.add(activeSessionId);
     for (const session of this.recentSessions) {
-      if (session.status === "complete" && session.completionRevision != null && selectedSessions.has(session.threadId) &&
-        !this.activeSessions.has(session.threadId)) {
+      if (session.status === "complete" && session.completionRevision != null && selectedSessions.has(session.threadId)) {
         this.acknowledgedCompletions.set(session.threadId, session.completionRevision);
       }
     }
-    this.activeSessions = selectedSessions;
+    const visibleSessions = new Map(this.recentSessions.map((session) => [session.threadId, {
+      ...session,
+      status: session.status === "complete" && session.completionRevision != null &&
+        this.acknowledgedCompletions.get(session.threadId) === session.completionRevision ? "idle" as const : session.status
+    }]));
     return {
       ...snapshot,
-      hostSessions: this.recentSessions.map((session) => ({
-        ...session,
-        status: session.status === "complete" && session.completionRevision != null &&
-          this.acknowledgedCompletions.get(session.threadId) === session.completionRevision ? "idle" : session.status
-      })),
+      hostSessions: [...visibleSessions.values()],
       slots: snapshot.slots.map((slot) => {
         const sessionId = sessionIdFromThreadKey(slot.threadKey);
-        return { ...slot, ownedByHost: sessionId != null && this.sessionIds.has(sessionId) };
+        const session = sessionId ? visibleSessions.get(sessionId) : undefined;
+        const ownedByHost = sessionId != null && this.sessionIds.has(sessionId);
+        return {
+          ...slot,
+          ownedByHost,
+          status: ownedByHost && session ? reconcileOwnedStatus(slot.status, session.status) : slot.status,
+          ...(session?.contextUsedPercent != null
+            ? { contextUsedPercent: session.contextUsedPercent }
+            : {})
+        };
       })
     };
   }
@@ -57,16 +69,17 @@ export class CodexSessionOwnershipIndex {
     }
   }
 
-  private async refreshIfNeeded(now: number): Promise<void> {
-    if (now - this.refreshedAt < this.refreshIntervalMs) return;
+  private async refreshIfNeeded(now: number, trackedSessions: Set<string>): Promise<void> {
+    const needsContext = [...trackedSessions].some((sessionId) => !this.contextParsedSessions.has(sessionId));
+    if (!needsContext && now - this.refreshedAt < this.refreshIntervalMs) return;
     if (this.refreshInFlight) return this.refreshInFlight;
-    const pending = this.refresh(now);
+    const pending = this.refresh(now, trackedSessions);
     this.refreshInFlight = pending;
     try { await pending; }
     finally { if (this.refreshInFlight === pending) this.refreshInFlight = undefined; }
   }
 
-  private async refresh(now: number): Promise<void> {
+  private async refresh(now: number, trackedSessions: Set<string>): Promise<void> {
     const next = new Set<string>();
     const sessionFiles: Array<{ threadId: string; path: string }> = [];
     const files: Array<{ threadId: string; path: string; activityAt: number }> = [];
@@ -105,12 +118,16 @@ export class CodexSessionOwnershipIndex {
       if (!uniqueRecent.has(file.threadId)) uniqueRecent.set(file.threadId, file);
     }
     const recent = [...uniqueRecent.values()].slice(0, 128);
+    const contextParsed = new Set<string>();
     this.recentSessions = await Promise.all(recent.map(async ({ threadId, path, activityAt }) => {
-      const recentStatus = now - activityAt <= 15 * 60_000
+      const shouldRead = now - activityAt <= 15 * 60_000 || trackedSessions.has(threadId);
+      const recentStatus = shouldRead
         ? await readRecentSessionStatus(path)
         : { status: "idle" as const };
+      if (shouldRead) contextParsed.add(threadId);
       return { threadId, activityAt, ...recentStatus };
     }));
+    this.contextParsedSessions = contextParsed;
     const currentIds = new Set(this.recentSessions.map((session) => session.threadId));
     for (const threadId of this.acknowledgedCompletions.keys()) {
       if (!currentIds.has(threadId)) this.acknowledgedCompletions.delete(threadId);
@@ -132,7 +149,9 @@ function defaultSessionRoots(): string[] {
   return [join(codexHome, "sessions"), join(codexHome, "archived_sessions")];
 }
 
-async function readRecentSessionStatus(path: string): Promise<Pick<HostSessionPresence, "status" | "completionRevision">> {
+async function readRecentSessionStatus(
+  path: string
+): Promise<Pick<HostSessionPresence, "status" | "completionRevision" | "contextUsedPercent">> {
   try {
     const handle = await open(path, "r");
     try {
@@ -141,19 +160,76 @@ async function readRecentSessionStatus(path: string): Promise<Pick<HostSessionPr
       const buffer = Buffer.alloc(length);
       await handle.read(buffer, 0, length, Math.max(0, info.size - length));
       const tail = buffer.toString("utf8");
-      const completedAt = tail.lastIndexOf('"type":"task_complete"');
-      const activeAt = Math.max(
-        tail.lastIndexOf('"type":"agent_reasoning"'),
-        tail.lastIndexOf('"type":"function_call"'),
-        tail.lastIndexOf('"type":"turn_context"')
-      );
-      if (activeAt > completedAt) return { status: "working" };
-      if (completedAt >= 0) return { status: "complete", completionRevision: info.size - length + completedAt };
-      return { status: "idle" };
+      const baseOffset = info.size - length;
+      let lifecycle: "working" | "complete" | undefined;
+      let completionRevision: number | undefined;
+      let lineStart = baseOffset === 0 ? 0 : buffer.indexOf(0x0a) + 1;
+      while (lineStart < buffer.length) {
+        const newline = buffer.indexOf(0x0a, lineStart);
+        const lineEnd = newline < 0 ? buffer.length : newline;
+        try {
+          const event = JSON.parse(buffer.subarray(lineStart, lineEnd).toString("utf8")) as {
+            type?: string;
+            payload?: { type?: string };
+          };
+          const eventType = event.type === "event_msg" ? event.payload?.type : undefined;
+          if (eventType === "task_started" || eventType === "agent_reasoning" || eventType === "function_call") {
+            lifecycle = "working";
+          } else if (eventType === "task_complete") {
+            lifecycle = "complete";
+            completionRevision = baseOffset + lineStart;
+          }
+        } catch { /* Ignore a truncated first or last JSONL record. */ }
+        if (newline < 0) break;
+        lineStart = newline + 1;
+      }
+      const contextUsedPercent = readContextUsedPercent(tail);
+      if (lifecycle === "working") return { status: "working", ...(contextUsedPercent != null ? { contextUsedPercent } : {}) };
+      if (lifecycle === "complete" && completionRevision != null) return {
+        status: "complete", completionRevision,
+        ...(contextUsedPercent != null ? { contextUsedPercent } : {})
+      };
+      return { status: "idle", ...(contextUsedPercent != null ? { contextUsedPercent } : {}) };
     } finally {
       await handle.close();
     }
   } catch {
     return { status: "idle" };
   }
+}
+
+function reconcileOwnedStatus(nativeStatus: string, sessionStatus: HostSessionPresence["status"]): string {
+  if (["approval", "awaiting-approval", "awaiting-response", "error"].includes(nativeStatus)) return nativeStatus;
+  if (sessionStatus === "working") return "working";
+  if (sessionStatus === "complete") return ["unread", "complete", "completed", "done"].includes(nativeStatus)
+    ? nativeStatus
+    : "complete";
+  return "idle";
+}
+
+function readContextUsedPercent(tail: string): number | null {
+  let offset = tail.lastIndexOf('"type":"token_count"');
+  while (offset >= 0) {
+    const start = tail.lastIndexOf("\n", offset) + 1;
+    const nextLine = tail.indexOf("\n", offset);
+    const end = nextLine < 0 ? tail.length : nextLine;
+    try {
+      const event = JSON.parse(tail.slice(start, end)) as {
+        type?: string;
+        payload?: {
+          type?: string;
+          info?: { last_token_usage?: { total_tokens?: unknown }; model_context_window?: unknown };
+        };
+      };
+      const total = event.payload?.info?.last_token_usage?.total_tokens;
+      const window = event.payload?.info?.model_context_window;
+      if (event.type === "event_msg" && event.payload?.type === "token_count" &&
+        typeof total === "number" && Number.isFinite(total) && total >= 0 &&
+        typeof window === "number" && Number.isFinite(window) && window > 0) {
+        return Math.max(0, Math.min(100, Math.round(total / window * 100)));
+      }
+    } catch { /* Ignore a truncated first or last JSONL record. */ }
+    offset = tail.lastIndexOf('"type":"token_count"', start - 1);
+  }
+  return null;
 }

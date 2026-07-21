@@ -52,6 +52,54 @@ test("recent local rollout tails expose structural working and completion state 
   }
 });
 
+test("rollout token counts expose bounded per-thread context usage without task content", async () => {
+  const root = await mkdtemp(join(tmpdir(), "codex-deck-context-"));
+  try {
+    const threadId = "10000000-0000-4000-8000-000000000006";
+    const tokenCount = JSON.stringify({
+      type: "event_msg",
+      payload: {
+        type: "token_count",
+        info: {
+          total_token_usage: { total_tokens: 99_999_999 },
+          last_token_usage: { total_tokens: 80_000 },
+          model_context_window: 100_000
+        }
+      }
+    });
+    await writeFile(join(root, `rollout-now-${threadId}.jsonl`), `${tokenCount}\n`);
+    const value = snapshotFor(threadId, false);
+    const annotated = await new CodexSessionOwnershipIndex([root], 60_000).annotate(value);
+    assert.equal(annotated.slots[0]!.contextUsedPercent, 80);
+    assert.equal(
+      annotated.hostSessions?.find((session) => session.threadId === threadId)?.contextUsedPercent,
+      80);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("a renderer turn_context after task_complete does not resurrect a finished task", async () => {
+  const root = await mkdtemp(join(tmpdir(), "codex-deck-lifecycle-"));
+  try {
+    const threadId = "10000000-0000-4000-8000-000000000007";
+    const path = join(root, `rollout-now-${threadId}.jsonl`);
+    await writeFile(path,
+      '{"type":"event_msg","payload":{"type":"task_started"}}\n' +
+      '{"type":"event_msg","payload":{"type":"task_complete"}}\n' +
+      '{"type":"turn_context","payload":{"type":"turn_context"}}\n');
+    const index = new CodexSessionOwnershipIndex([root], 0);
+    let state = await index.annotate(snapshotFor(threadId, false), Date.now());
+    assert.equal(state.hostSessions?.find((session) => session.threadId === threadId)?.status, "complete");
+
+    await appendFile(path, '{"type":"event_msg","payload":{"type":"task_started"}}\n');
+    state = await index.annotate(snapshotFor(threadId, false), Date.now() + 1);
+    assert.equal(state.hostSessions?.find((session) => session.threadId === threadId)?.status, "working");
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("acknowledging a completion survives later file touches but a new completion becomes unread", async () => {
   const root = await mkdtemp(join(tmpdir(), "codex-deck-completion-ack-"));
   try {
@@ -87,11 +135,28 @@ test("the active renderer task acknowledges completion outside the six Micro slo
     value.activeThreadKey = `local:${threadId}`;
     assert.equal((await index.annotate(value, Date.now())).hostSessions?.find((session) => session.threadId === threadId)?.status, "working");
     await appendFile(path, '{"type":"event_msg","payload":{"type":"task_complete"}}\n');
-    assert.equal((await index.annotate(value, Date.now() + 1)).hostSessions?.find((session) => session.threadId === threadId)?.status, "complete");
-    delete value.activeThreadKey;
-    await index.annotate(value, Date.now() + 2);
+    assert.equal((await index.annotate(value, Date.now() + 1)).hostSessions?.find((session) => session.threadId === threadId)?.status, "idle");
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("owned rollout lifecycle clears stale native working and unread colors", async () => {
+  const root = await mkdtemp(join(tmpdir(), "codex-deck-native-status-"));
+  try {
+    const threadId = "10000000-0000-4000-8000-000000000008";
+    const path = join(root, `rollout-now-${threadId}.jsonl`);
+    await writeFile(path, '{"type":"event_msg","payload":{"type":"task_complete"}}\n');
+    const index = new CodexSessionOwnershipIndex([root], 0);
+    const value = snapshotFor(threadId, false);
+    value.slots[0]!.status = "working";
+    assert.equal((await index.annotate(value, Date.now())).slots[0]!.status, "complete");
+
     value.activeThreadKey = `local:${threadId}`;
-    assert.equal((await index.annotate(value, Date.now() + 3)).hostSessions?.find((session) => session.threadId === threadId)?.status, "idle");
+    value.slots[0]!.status = "unread";
+    const active = await index.annotate(value, Date.now() + 1);
+    assert.equal(active.hostSessions?.find((session) => session.threadId === threadId)?.status, "idle");
+    assert.equal(active.slots[0]!.status, "idle");
   } finally {
     await rm(root, { recursive: true, force: true });
   }

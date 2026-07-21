@@ -59,7 +59,8 @@ test("renderer refreshes stale account usage without waiting for application foc
   const bridge = await readFile(new URL("../src/codex-micro-renderer-bridge.ts", import.meta.url), "utf8");
   assert.match(bridge, /Symbol\.for\('codex-deck-rate-limit-refresh-at'\)/);
   assert.match(bridge, /now - dataUpdatedAt >= 15000/);
-  assert.match(bridge, /await query\.fetch\(\)/);
+  assert.match(bridge, /Promise\.resolve\(query\.fetch\(\)\)\.catch/);
+  assert.doesNotMatch(bridge, /await query\.fetch\(\)/);
 });
 
 test("single usage key preserves the circular design and centers numeric weight", () => {

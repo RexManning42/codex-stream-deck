@@ -1,13 +1,18 @@
 import assert from "node:assert/strict";
+import { X509Certificate } from "node:crypto";
 import { createServer } from "node:net";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import WebSocket from "ws";
+import { generate } from "selfsigned";
 import { CodexRelayClient, RELAY_SNAPSHOT_STALE_MS, resolveRelayHealth } from "../src/codex-relay-client.js";
-import { isAllowedRelayHost } from "../src/relay-network.js";
-import { CodexRelayServer, readRelayServerConfig, validateRelayServerConfig } from "../src/codex-relay-server.js";
+import { isAllowedRelayHost, isPrivateLanHost, privateLanAddresses } from "../src/relay-network.js";
+import {
+  CodexRelayServer, readRelayServerConfig, relayDiscoveryTxt,
+  relaySnapshotFailureShouldDegrade, validateRelayServerConfig
+} from "../src/codex-relay-server.js";
 import { HostActivityIndex, RELAY_PROTOCOL_VERSION, parseRelayCommand, type HostSnapshot } from "../src/relay-protocol.js";
 import type { CodexHost, MicroSnapshot } from "../src/types.js";
 
@@ -37,6 +42,50 @@ test("relay refuses wildcard exposure and short authentication tokens", () => {
   assert.equal(isAllowedRelayHost("100.64.0.42"), true);
   assert.equal(isAllowedRelayHost("example.tailnet.ts.net"), true);
   assert.equal(isAllowedRelayHost("8.8.8.8"), false);
+});
+
+test("nearby relay accepts only pinned TLS on a private address and never advertises its token", async () => {
+  const certificate = await generate([{ name: "commonName", value: "Codex Deck test" }], {
+    keyType: "ec", curve: "P-256", algorithm: "sha256"
+  });
+  const fingerprint = new X509Certificate(certificate.cert).fingerprint256
+    .replaceAll(":", "").toLowerCase();
+  const local = {
+    enabled: true,
+    listenHost: "auto",
+    port: 47_653,
+    token: "secret".repeat(8),
+    transport: "local" as const,
+    tls: {
+      certificate: certificate.cert,
+      privateKey: certificate.private,
+      fingerprintSha256: fingerprint
+    },
+    discovery: { enabled: true }
+  };
+  validateRelayServerConfig(local);
+  const txt = relayDiscoveryTxt(local, host, "192.168.1.25");
+  assert.equal(txt.hostId, host.hostId);
+  assert.equal(txt.address, "192.168.1.25");
+  assert.equal(txt.fingerprint, fingerprint);
+  assert.equal(JSON.stringify(txt).includes(local.token), false);
+  assert.equal("token" in txt, false);
+  assert.throws(
+    () => validateRelayServerConfig({ ...local, tls: undefined }), /requires pinned TLS/);
+  assert.throws(
+    () => validateRelayServerConfig({ ...local, listenHost: "203.0.113.8" }), /secure auto local mode/);
+  assert.equal(isPrivateLanHost("10.0.0.4"), true);
+  assert.equal(isPrivateLanHost("172.31.9.2"), true);
+  assert.equal(isPrivateLanHost("192.168.50.9"), true);
+  assert.equal(isPrivateLanHost("100.100.100.100"), false);
+  assert.equal(isPrivateLanHost("8.8.8.8"), false);
+  assert.deepEqual(privateLanAddresses({
+    en0: [
+      { address: "192.168.1.25", netmask: "255.255.255.0", family: "IPv4", mac: "aa", internal: false, cidr: "192.168.1.25/24" },
+      { address: "fe80::1", netmask: "ffff::", family: "IPv6", mac: "aa", internal: false, cidr: "fe80::1/64", scopeid: 1 }
+    ],
+    vpn: [{ address: "100.100.100.100", netmask: "255.192.0.0", family: "IPv4", mac: "bb", internal: false, cidr: "100.100.100.100/10" }]
+  }), ["192.168.1.25"]);
 });
 
 test("optional mobile relay config is absent-safe and validates before startup", async () => {
@@ -73,8 +122,11 @@ test("relay snapshot parser bounds and validates host session catalogs", async (
   const { parseRelayServerMessage } = await import("../src/relay-protocol.js");
   const valid = { type: "snapshot", protocol: 1, host, observedAt: 1, snapshot: structuredClone(snapshot) };
   valid.snapshot.hostSessions = [{ threadId: "00000000-0000-4000-8000-000000000000", activityAt: 1, status: "working", completionRevision: 42 }];
+  valid.snapshot.hostSessions[0]!.contextUsedPercent = 56;
+  valid.snapshot.slots[0]!.contextUsedPercent = 56;
   assert.notEqual(parseRelayServerMessage(valid), null);
   valid.snapshot.activeThreadKey = "local:00000000-0000-4000-8000-000000000000";
+  valid.snapshot.activeThreadTitle = "Build the iPhone companion";
   assert.notEqual(parseRelayServerMessage(valid), null);
   valid.snapshot.usage = {
     windows: [{ id: "weekly", kind: "weekly", usedPercent: 35, remainingPercent: 65, windowDurationMins: 10_080, resetsAt: 1_800_000_000_000 }],
@@ -88,10 +140,17 @@ test("relay snapshot parser bounds and validates host session catalogs", async (
   assert.equal(parseRelayServerMessage(invalidUsage), null);
   valid.snapshot.activeThreadKey = "local:not-a-thread";
   assert.equal(parseRelayServerMessage(valid), null);
+  valid.snapshot.activeThreadKey = "local:00000000-0000-4000-8000-000000000000";
+  valid.snapshot.activeThreadTitle = "x".repeat(241);
+  assert.equal(parseRelayServerMessage(valid), null);
+  delete valid.snapshot.activeThreadTitle;
   delete valid.snapshot.activeThreadKey;
   const invalidRevision = structuredClone(valid);
   invalidRevision.snapshot.hostSessions![0]!.completionRevision = -1;
   assert.equal(parseRelayServerMessage(invalidRevision), null);
+  const invalidContext = structuredClone(valid);
+  invalidContext.snapshot.slots[0]!.contextUsedPercent = 101;
+  assert.equal(parseRelayServerMessage(invalidContext), null);
   const invalid = structuredClone(valid) as typeof valid & { snapshot: { hostSessions: unknown[] } };
   invalid.snapshot.hostSessions = Array.from({ length: 129 }, () => valid.snapshot.hostSessions![0]!);
   assert.equal(parseRelayServerMessage(invalid), null);
@@ -113,6 +172,12 @@ test("relay health becomes degraded from local receipt age without trusting remo
   });
   const offline = { state: "offline", reason: "relay-disconnected", changedAt: 2_000 } as const;
   assert.equal(resolveRelayHealth(offline, true, 1_000, 99_000), offline);
+});
+
+test("relay suppresses one transient renderer failure after a healthy snapshot", () => {
+  assert.equal(relaySnapshotFailureShouldDegrade(false, 1), true, "initial failure has no safe snapshot");
+  assert.equal(relaySnapshotFailureShouldDegrade(true, 1), false, "one transient failure keeps last-known state");
+  assert.equal(relaySnapshotFailureShouldDegrade(true, 2), true, "repeated failures surface degraded health");
 });
 
 test("host activity merge globally orders explicit Mac and Windows timestamps", () => {
@@ -186,6 +251,45 @@ test("backing rollout ownership beats a mirrored remote-SSH recent entry", () =>
   assert.equal(match?.selected, true, "selection is aggregated across both visible mirrors");
 });
 
+test("a stale mirrored working state cannot override a fresh idle owner", () => {
+  const windows: CodexHost = { hostId: "11111111-1111-4111-8111-111111111111", hostName: "Windows", platform: "win32" };
+  const shared = "00000000-0000-4000-8000-000000000000";
+  const macSnapshot = structuredClone(snapshot);
+  const windowsSnapshot = structuredClone(snapshot);
+  macSnapshot.slots[0] = {
+    ...macSnapshot.slots[0]!, threadKey: shared, status: "idle", selected: false, ownedByHost: true
+  };
+  windowsSnapshot.slots[0] = {
+    ...windowsSnapshot.slots[0]!, threadKey: shared, status: "working", selected: true, ownedByHost: false
+  };
+  const match = new HostActivityIndex().merge([
+    { host: windows, snapshot: windowsSnapshot, observedAt: 1_000 },
+    { host, snapshot: macSnapshot, observedAt: 7_001 }
+  ]).find((slot) => slot.threadKey === shared);
+  assert.equal(match?.host.platform, "darwin", "the backing host still receives commands");
+  assert.equal(match?.status, "idle", "fresh native state wins over a stale mirror");
+  assert.equal(match?.selected, false, "stale remote selection is not aggregated");
+});
+
+test("a recent mirrored working state still augments a fresh idle owner", () => {
+  const windows: CodexHost = { hostId: "11111111-1111-4111-8111-111111111111", hostName: "Windows", platform: "win32" };
+  const shared = "00000000-0000-4000-8000-000000000000";
+  const macSnapshot = structuredClone(snapshot);
+  const windowsSnapshot = structuredClone(snapshot);
+  macSnapshot.slots[0] = {
+    ...macSnapshot.slots[0]!, threadKey: shared, status: "idle", selected: false, ownedByHost: true
+  };
+  windowsSnapshot.slots[0] = {
+    ...windowsSnapshot.slots[0]!, threadKey: shared, status: "working", selected: true, ownedByHost: false
+  };
+  const match = new HostActivityIndex().merge([
+    { host: windows, snapshot: windowsSnapshot, observedAt: 3_000 },
+    { host, snapshot: macSnapshot, observedAt: 7_001 }
+  ]).find((slot) => slot.threadKey === shared);
+  assert.equal(match?.status, "working");
+  assert.equal(match?.selected, true);
+});
+
 test("host session catalogs route a mirror even when the owning host has no native slot for it", () => {
   const windows: CodexHost = { hostId: "11111111-1111-4111-8111-111111111111", hostName: "Windows", platform: "win32" };
   const shared = "00000000-0000-4000-8000-000000000000";
@@ -217,6 +321,44 @@ test("host session catalogs return a Mac-only cloud mirror to its Windows owner"
   ], 2_000, windows.hostId).find((slot) => slot.threadKey === shared);
   assert.equal(match?.host.platform, "win32");
   assert.equal(match?.status, "working");
+});
+
+test("temporary Windows new-thread keys merge with the session-backed Mac mirror", () => {
+  const windows: CodexHost = {
+    hostId: "11111111-1111-4111-8111-111111111111", hostName: "Windows", platform: "win32"
+  };
+  const temporary = "local:client-new-thread:819699e8-ed6d-46fb-bfd1-3280c028de2b";
+  const rollout = "019f804a-4e0a-7b32-bf66-af64a405d2d5";
+  const title = "Autocheck 3 Installation prüfen";
+  const windowsSnapshot = structuredClone(snapshot);
+  const macSnapshot = structuredClone(snapshot);
+  windowsSnapshot.agentSource = "priority";
+  macSnapshot.agentSource = "priority";
+  windowsSnapshot.activeThreadKey = temporary;
+  windowsSnapshot.slots[0] = {
+    ...windowsSnapshot.slots[0]!, threadKey: temporary, title, status: "idle",
+    selected: true, ownedByHost: false
+  };
+  windowsSnapshot.hostSessions = [
+    { threadId: rollout, activityAt: 2_000, status: "complete", completionRevision: 10 }
+  ];
+  macSnapshot.slots[0] = {
+    ...macSnapshot.slots[0]!, threadKey: `local:${rollout}`, title, status: "working",
+    selected: false, ownedByHost: false
+  };
+
+  const merged = new HostActivityIndex().merge([
+    { host: windows, snapshot: windowsSnapshot, observedAt: 2_000 },
+    { host, snapshot: macSnapshot, observedAt: 2_000 }
+  ], 2_000, windows.hostId);
+  const matches = merged.filter((slot) => slot.title === title);
+
+  assert.equal(matches.length, 1);
+  assert.equal(matches[0]!.host.platform, "win32");
+  assert.equal(matches[0]!.sourceSlot, 0);
+  assert.equal(matches[0]!.threadKey, temporary, "commands keep the live Windows slot key");
+  assert.equal(matches[0]!.selected, true);
+  assert.equal(matches[0]!.status, "working", "the live mirror status remains visible");
 });
 
 test("delayed mirror status does not reorder an owned active task", () => {
@@ -436,7 +578,7 @@ test("a completion opened through a cross-host mirror stays idle until a new com
 
   assert.equal(index.merge(inputs(), 2_000, windows.hostId).find((slot) => slot.threadKey === completed)?.status, "working");
   macSnapshot.hostSessions[0] = { threadId: completed, activityAt: 2_000, status: "complete", completionRevision: 10 };
-  assert.equal(index.merge(inputs(), 2_001, windows.hostId).find((slot) => slot.threadKey === completed)?.status, "complete");
+  assert.equal(index.merge(inputs(), 2_001, windows.hostId).find((slot) => slot.threadKey === completed)?.status, "idle");
   delete windowsSnapshot.activeThreadKey;
   index.merge(inputs(), 2_002, windows.hostId);
   windowsSnapshot.activeThreadKey = `local:${completed}`;
@@ -448,6 +590,44 @@ test("a completion opened through a cross-host mirror stays idle until a new com
   assert.equal(index.merge(inputs(), 2_005, windows.hostId).find((slot) => slot.threadKey === completed)?.status, "complete");
   macSnapshot.slots[0]!.status = "working";
   assert.equal(index.merge(inputs(), 2_006, windows.hostId).find((slot) => slot.threadKey === completed)?.status, "working");
+});
+
+test("host lifecycle preserves fresh native approval attention", () => {
+  const windows: CodexHost = { hostId: "11111111-1111-4111-8111-111111111111", hostName: "Windows", platform: "win32" };
+  const windowsSnapshot = structuredClone(snapshot);
+  const macSnapshot = structuredClone(snapshot);
+  const threadId = "50000000-0000-4000-8000-000000000003";
+  windowsSnapshot.slots[0] = { ...windowsSnapshot.slots[0]!, threadKey: threadId, status: "working" };
+  macSnapshot.slots[0] = { ...macSnapshot.slots[0]!, threadKey: threadId, status: "awaiting-approval", ownedByHost: true };
+  macSnapshot.hostSessions = [{ threadId, activityAt: 2_000, status: "idle" }];
+  const merged = new HostActivityIndex().merge([
+    { host: windows, snapshot: windowsSnapshot, observedAt: 2_000 },
+    { host, snapshot: macSnapshot, observedAt: 2_000 }
+  ], 2_000, windows.hostId);
+  assert.equal(merged.find((slot) => slot.threadKey === threadId)?.status, "awaiting-approval");
+});
+
+test("an old session completion cannot resurrect a current native idle slot", () => {
+  const windows: CodexHost = { hostId: "11111111-1111-4111-8111-111111111111", hostName: "Windows", platform: "win32" };
+  const windowsSnapshot = structuredClone(snapshot);
+  const macSnapshot = structuredClone(snapshot);
+  const completed = "50000000-0000-4000-8000-000000000002";
+  for (const slot of [...windowsSnapshot.slots, ...macSnapshot.slots]) {
+    slot.status = "idle";
+    slot.selected = false;
+  }
+  windowsSnapshot.slots[0] = { ...windowsSnapshot.slots[0]!, threadKey: completed, ownedByHost: false };
+  macSnapshot.slots[0] = { ...macSnapshot.slots[0]!, threadKey: completed, ownedByHost: true };
+  macSnapshot.hostSessions = [{
+    threadId: completed, activityAt: 1_000, status: "complete", completionRevision: 10
+  }];
+  const observedAt = 1_000 + 5 * 60_000 + 1;
+  const merged = new HostActivityIndex().merge([
+    { host: windows, snapshot: windowsSnapshot, observedAt },
+    { host, snapshot: macSnapshot, observedAt }
+  ], observedAt, windows.hostId);
+
+  assert.equal(merged.find((slot) => slot.threadKey === completed)?.status, "idle");
 });
 
 test("authenticated relay publishes snapshots and dispatches typed commands", async () => {
@@ -469,6 +649,10 @@ test("authenticated relay publishes snapshots and dispatches typed commands", as
   socket.send(JSON.stringify({ type: "auth", protocol: RELAY_PROTOCOL_VERSION, token: "t".repeat(32) }));
   const first = await messages.next();
   assert.equal(first.type, "ready");
+  assert.equal(first.bridge, "native-codex-micro");
+  assert.deepEqual(first.capabilities, [
+    "agent", "action", "joystick", "encoder", "reasoning", "keycap", "usage", "rate-limit-reset"
+  ]);
   const second = await messages.next();
   assert.equal(second.type, "snapshot");
   socket.send(JSON.stringify({

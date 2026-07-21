@@ -18,6 +18,7 @@ for (const filename of [
 }
 await cp(resolve("static/manifest.json"), resolve(output, "manifest.json"));
 await cp(resolve("static/property-inspector/usage-limit.html"), resolve(output, "static/property-inspector/usage-limit.html"));
+await cp(resolve("static/property-inspector/agent.html"), resolve(output, "static/property-inspector/agent.html"));
 
 await build({
   entryPoints: [resolve("src/plugin.ts")],

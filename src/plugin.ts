@@ -15,6 +15,10 @@ import {
 
 const controller = new DeckController();
 
+streamDeck.settings.onDidReceiveGlobalSettings<{ showContextRings?: boolean }>((event) => {
+  controller.setContextRingVisibility(event.settings.showContextRings !== false);
+});
+
 for (const pluginAction of [
   new Agent1(controller), new Agent2(controller), new Agent3(controller),
   new Agent4(controller), new Agent5(controller), new Agent6(controller),

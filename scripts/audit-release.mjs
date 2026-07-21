@@ -7,6 +7,7 @@ const roots = process.argv.slice(2).length
 
 const forbiddenFiles = new Set([
   "codex-micro-bridge.json", "control-target.json", "host.json", "relay-client.json", "relay-server.json",
+  "mobile-relay-server.json", "mobile-local-relay-server.json", "mobile-local-pairing.svg",
   "relay-tunnel.pid", "watcher-state.json", "watcher.log", "watcher.log.1", "watcher.log.2", "watcher.log.3"
 ]);
 const protectedKeycaps = new Set("FAST APPR REJ SPLIT MIC CODEX BUG OAI TERM DWN DEL NEW NAV MAGIC DIFF PLAY GIT BRCH MRG PR PAINT LAB PARTY TIME MIND+ MIND- SETUP FOLD UPL APPS".split(" "));

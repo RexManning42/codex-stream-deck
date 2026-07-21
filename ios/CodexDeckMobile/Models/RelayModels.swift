@@ -6,12 +6,23 @@ enum HostPlatform: String, Codable, Sendable {
 
   var shortLabel: String { self == .darwin ? "M" : "W" }
   var displayName: String { self == .darwin ? "Mac" : "Windows" }
+  var opposite: HostPlatform { self == .darwin ? .win32 : .darwin }
 }
 
 struct CodexHost: Codable, Hashable, Sendable, Identifiable {
   let hostId: String
   let hostName: String
   let platform: HostPlatform
+  let codexVersion: String?
+
+  init(
+    hostId: String, hostName: String, platform: HostPlatform, codexVersion: String? = nil
+  ) {
+    self.hostId = hostId
+    self.hostName = hostName
+    self.platform = platform
+    self.codexVersion = codexVersion
+  }
   var id: String { hostId }
 }
 
@@ -23,6 +34,21 @@ struct AgentSlot: Codable, Hashable, Sendable, Identifiable {
   let selected: Bool
   let activityAt: Double?
   let ownedByHost: Bool?
+  let contextUsedPercent: Double?
+
+  init(
+    id: Int, threadKey: String?, title: String?, status: String, selected: Bool,
+    activityAt: Double?, ownedByHost: Bool?, contextUsedPercent: Double? = nil
+  ) {
+    self.id = id
+    self.threadKey = threadKey
+    self.title = title
+    self.status = status
+    self.selected = selected
+    self.activityAt = activityAt
+    self.ownedByHost = ownedByHost
+    self.contextUsedPercent = contextUsedPercent
+  }
 }
 
 struct HostSessionPresence: Codable, Hashable, Sendable {
@@ -30,6 +56,18 @@ struct HostSessionPresence: Codable, Hashable, Sendable {
   let activityAt: Double
   let status: String
   let completionRevision: Int?
+  let contextUsedPercent: Double?
+
+  init(
+    threadId: String, activityAt: Double, status: String, completionRevision: Int?,
+    contextUsedPercent: Double? = nil
+  ) {
+    self.threadId = threadId
+    self.activityAt = activityAt
+    self.status = status
+    self.completionRevision = completionRevision
+    self.contextUsedPercent = contextUsedPercent
+  }
 }
 
 struct UsageWindow: Codable, Hashable, Sendable, Identifiable {
@@ -61,6 +99,7 @@ struct MicroLayout: Codable, Hashable, Sendable {
 struct MicroSnapshot: Codable, Hashable, Sendable {
   let slots: [AgentSlot]
   let activeThreadKey: String?
+  let activeThreadTitle: String?
   let layout: MicroLayout
   let agentSource: String
   let lightingAutoOff: String
@@ -69,10 +108,48 @@ struct MicroSnapshot: Codable, Hashable, Sendable {
   let hostSessions: [HostSessionPresence]?
 }
 
+struct ActiveChatSummary: Identifiable, Hashable, Sendable {
+  let host: CodexHost
+  let threadKey: String
+  let title: String
+  let status: String
+  var id: String { "\(host.hostId):\(threadKey)" }
+}
+
 struct HostSnapshot: Codable, Hashable, Sendable {
   let host: CodexHost
   let observedAt: Double
   let snapshot: MicroSnapshot
+}
+
+enum ThreadIdentity {
+  static func canonical(_ threadKey: String) -> String {
+    threadKey
+      .split(separator: ":")
+      .last
+      .map(String.init)?
+      .lowercased() ?? threadKey.lowercased()
+  }
+}
+
+struct AgentReference: Identifiable, Codable, Hashable, Sendable {
+  let threadIdentity: String
+  let fallbackTitle: String
+  let fallbackPlatform: HostPlatform
+
+  init(agent: RoutedAgent) {
+    threadIdentity = ThreadIdentity.canonical(agent.threadKey)
+    fallbackTitle = agent.title
+    fallbackPlatform = agent.originPlatform
+  }
+
+  init(threadIdentity: String, fallbackTitle: String, fallbackPlatform: HostPlatform) {
+    self.threadIdentity = ThreadIdentity.canonical(threadIdentity)
+    self.fallbackTitle = fallbackTitle
+    self.fallbackPlatform = fallbackPlatform
+  }
+
+  var id: String { threadIdentity }
 }
 
 struct RoutedAgent: Identifiable, Hashable, Sendable {
@@ -84,6 +161,27 @@ struct RoutedAgent: Identifiable, Hashable, Sendable {
   let activityAt: Double
   let host: CodexHost
   let sourceSlot: Int
+  let originPlatform: HostPlatform
+  let ownedByHost: Bool?
+  let contextUsedPercent: Double?
+
+  init(
+    id: Int, threadKey: String, title: String, status: String, selected: Bool,
+    activityAt: Double, host: CodexHost, sourceSlot: Int, originPlatform: HostPlatform,
+    ownedByHost: Bool?, contextUsedPercent: Double? = nil
+  ) {
+    self.id = id
+    self.threadKey = threadKey
+    self.title = title
+    self.status = status
+    self.selected = selected
+    self.activityAt = activityAt
+    self.host = host
+    self.sourceSlot = sourceSlot
+    self.originPlatform = originPlatform
+    self.ownedByHost = ownedByHost
+    self.contextUsedPercent = contextUsedPercent
+  }
 
   var isAttention: Bool {
     ["approval", "awaiting-approval", "awaiting-response", "error", "unread"].contains(status)
@@ -134,11 +232,33 @@ enum RelayCommand: Encodable, Sendable {
   }
 }
 
+enum NodeConnectionMode: String, Codable, Sendable {
+  case remote
+  case nearby
+}
+
 struct NodeProfile: Codable, Hashable, Identifiable, Sendable {
   let id: UUID
   var name: String
   var url: URL
+  var mode: NodeConnectionMode?
+  var pairedHostId: String?
+  var certificateSHA256: String?
   var tokenKey: String { "relay-token-\(id.uuidString)" }
+
+  init(
+    id: UUID, name: String, url: URL, mode: NodeConnectionMode? = nil,
+    pairedHostId: String? = nil, certificateSHA256: String? = nil
+  ) {
+    self.id = id
+    self.name = name
+    self.url = url
+    self.mode = mode
+    self.pairedHostId = pairedHostId
+    self.certificateSHA256 = certificateSHA256
+  }
+
+  var connectionMode: NodeConnectionMode { mode ?? .remote }
 }
 
 enum NodeConnectionState: String, Sendable {
@@ -154,10 +274,98 @@ struct NodeStatus: Sendable {
   var snapshot: HostSnapshot?
   var detail: String?
   var changedAt = Date()
+  var lastSnapshotReceivedAt: Date?
+  var relayProtocol = 1
+  var capabilities: [String] = []
+  var bridgeKind: String?
+  var lastRoundTripMilliseconds: Int?
+  var lastConnectionTestAt: Date?
+  var requiresRepair = false
+
+  func snapshotAge(at now: Date = .now) -> TimeInterval? {
+    lastSnapshotReceivedAt.map { max(0, now.timeIntervalSince($0)) }
+  }
+}
+
+struct RelayConnectionProbe: Hashable, Sendable {
+  let elapsedMilliseconds: Int
+  let measuredAt: Date
+}
+
+struct RelayReadyMetadata: Decodable, Sendable {
+  let capabilities: [String]
+  let bridge: String?
+
+  init(capabilities: [String] = [], bridge: String? = nil) {
+    self.capabilities = capabilities
+    self.bridge = bridge
+  }
+}
+
+struct RelayDelivery: Hashable, Sendable {
+  let requestID: String
+  let elapsedMilliseconds: Int
+}
+
+enum CommandFeedbackMode: String, CaseIterable, Codable, Identifiable, Sendable {
+  case minimal
+  case detailed
+  case off
+
+  var id: String { rawValue }
+  var title: String {
+    switch self {
+    case .minimal: "Minimal"
+    case .detailed: "Detailed"
+    case .off: "Off"
+    }
+  }
+}
+
+enum CommandReceiptStage: String, Sendable {
+  case sending
+  case hostConfirmed
+  case stateConfirmed
+  case warning
+  case failed
+
+  var isTerminal: Bool {
+    switch self {
+    case .stateConfirmed, .warning, .failed: true
+    case .sending, .hostConfirmed: false
+    }
+  }
+}
+
+struct CommandReceipt: Identifiable, Equatable, Sendable {
+  let id: UUID
+  let title: String
+  let hostName: String
+  let hostPlatform: HostPlatform
+  let startedAt: Date
+  var stage: CommandReceiptStage
+  var detail: String
+  var requestID: String?
+
+  var isFailure: Bool { stage == .failed }
+}
+
+enum CommandTransactionError: LocalizedError {
+  case hostOffline
+  case staleSnapshot
+  case taskUnavailable
+
+  var errorDescription: String? {
+    switch self {
+    case .hostOffline: "That computer is offline."
+    case .staleSnapshot: "The app has an old snapshot. Wait for Codex to reconnect and try again."
+    case .taskUnavailable: "That task is no longer available."
+    }
+  }
 }
 
 enum RelayServerEvent: Decodable, Sendable {
-  case ready(CodexHost)
+  case ready(CodexHost, RelayReadyMetadata)
   case snapshot(HostSnapshot)
   case health(CodexHost, String, Double)
   case result(String, Bool, String?)
@@ -170,7 +378,11 @@ enum RelayServerEvent: Decodable, Sendable {
     }
     switch try values.decode(String.self, forKey: .type) {
     case "ready":
-      self = .ready(try values.decode(CodexHost.self, forKey: .host))
+      self = .ready(
+        try values.decode(CodexHost.self, forKey: .host),
+        RelayReadyMetadata(
+          capabilities: try values.decodeIfPresent([String].self, forKey: .capabilities) ?? [],
+          bridge: try values.decodeIfPresent(String.self, forKey: .bridge)))
     case "snapshot":
       self = .snapshot(
         HostSnapshot(
@@ -197,6 +409,7 @@ enum RelayServerEvent: Decodable, Sendable {
   }
 
   private enum CodingKeys: String, CodingKey {
-    case type, `protocol`, host, observedAt, snapshot, reason, requestId, ok, error
+    case type, `protocol`, host, observedAt, snapshot, reason, requestId, ok, error,
+      capabilities, bridge
   }
 }

@@ -1,19 +1,38 @@
 import Foundation
+import CryptoKit
+import Security
+
+typealias RelayNodeUpdate = @MainActor (UUID, NodeStatus) -> Void
 
 @MainActor
-final class RelayNodeConnection {
-  typealias Update = @MainActor (UUID, NodeStatus) -> Void
+protocol RelayNodeConnecting: AnyObject {
+  func start()
+  func stop(publishOffline: Bool)
+  func send(_ command: RelayCommand) async throws -> RelayDelivery
+  func testConnection() async throws -> RelayConnectionProbe
+}
 
+extension RelayNodeConnecting {
+  func stop() { stop(publishOffline: true) }
+  func testConnection() async throws -> RelayConnectionProbe {
+    throw RelayConnectionError.notConnected
+  }
+}
+
+@MainActor
+final class RelayNodeConnection: RelayNodeConnecting {
   private let profile: NodeProfile
   private let token: String
-  private let update: Update
+  private let update: RelayNodeUpdate
   private var task: URLSessionWebSocketTask?
+  private var session: URLSession?
+  private var trustDelegate: PinnedCertificateDelegate?
   private var runTask: Task<Void, Never>?
   private var pending: [String: CheckedContinuation<Void, Error>] = [:]
   private var status = NodeStatus()
   private var stopped = false
 
-  init(profile: NodeProfile, token: String, update: @escaping Update) {
+  init(profile: NodeProfile, token: String, update: @escaping RelayNodeUpdate) {
     self.profile = profile
     self.token = token
     self.update = update
@@ -25,21 +44,25 @@ final class RelayNodeConnection {
     runTask = Task { [weak self] in await self?.connectionLoop() }
   }
 
-  func stop() {
+  func stop(publishOffline: Bool = true) {
     stopped = true
     task?.cancel(with: .goingAway, reason: nil)
     task = nil
+    session?.invalidateAndCancel()
+    session = nil
+    trustDelegate = nil
     runTask?.cancel()
     runTask = nil
     failPending(URLError(.cancelled))
-    publish(state: .offline, detail: "Disconnected")
+    if publishOffline { publish(state: .offline, detail: "Disconnected") }
   }
 
-  func send(_ command: RelayCommand) async throws {
+  func send(_ command: RelayCommand) async throws -> RelayDelivery {
     guard let task, status.state == .ready || status.state == .degraded else {
       throw RelayConnectionError.notConnected
     }
     let requestID = UUID().uuidString
+    let startedAt = ContinuousClock.now
     let message = CommandEnvelope(
       type: "command", protocol: 1, requestId: requestID, command: command)
     let data = try JSONEncoder().encode(message)
@@ -60,6 +83,31 @@ final class RelayNodeConnection {
         }
       }
     }
+    let elapsed = startedAt.duration(to: .now)
+    return RelayDelivery(
+      requestID: requestID,
+      elapsedMilliseconds: Int(elapsed.components.seconds * 1_000)
+        + Int(elapsed.components.attoseconds / 1_000_000_000_000_000))
+  }
+
+  func testConnection() async throws -> RelayConnectionProbe {
+    guard let task, status.state == .ready || status.state == .degraded else {
+      throw RelayConnectionError.notConnected
+    }
+    let startedAt = ContinuousClock.now
+    let pingError: Error? = await withCheckedContinuation { continuation in
+      task.sendPing { continuation.resume(returning: $0) }
+    }
+    if let pingError { throw pingError }
+    let elapsed = startedAt.duration(to: .now)
+    let probe = RelayConnectionProbe(
+      elapsedMilliseconds: Int(elapsed.components.seconds * 1_000)
+        + Int(elapsed.components.attoseconds / 1_000_000_000_000_000),
+      measuredAt: .now)
+    status.lastRoundTripMilliseconds = probe.elapsedMilliseconds
+    status.lastConnectionTestAt = probe.measuredAt
+    update(profile.id, status)
+    return probe
   }
 
   private func connectionLoop() async {
@@ -82,7 +130,18 @@ final class RelayNodeConnection {
 
   private func connectOnce() async throws {
     publish(state: .connecting, detail: "Connecting")
-    let socket = URLSession.shared.webSocketTask(with: profile.url)
+    let connectionSession: URLSession
+    if profile.connectionMode == .nearby, let fingerprint = profile.certificateSHA256 {
+      let delegate = PinnedCertificateDelegate(fingerprintSHA256: fingerprint)
+      trustDelegate = delegate
+      connectionSession = URLSession(
+        configuration: .ephemeral, delegate: delegate,
+        delegateQueue: OperationQueue())
+      session = connectionSession
+    } else {
+      connectionSession = .shared
+    }
+    let socket = connectionSession.webSocketTask(with: profile.url)
     task = socket
     socket.resume()
     let auth = AuthEnvelope(type: "auth", protocol: 1, token: token)
@@ -104,12 +163,18 @@ final class RelayNodeConnection {
 
   private func handle(_ event: RelayServerEvent) {
     switch event {
-    case .ready(let host):
+    case .ready(let host, let metadata):
       status.host = host
+      status.relayProtocol = 1
+      status.capabilities = metadata.capabilities
+      status.bridgeKind = metadata.bridge
+      status.requiresRepair = false
       publish(state: .ready, detail: nil)
     case .snapshot(let snapshot):
       status.host = snapshot.host
       status.snapshot = snapshot
+      status.lastSnapshotReceivedAt = .now
+      status.requiresRepair = false
       publish(state: .ready, detail: nil)
     case .health(let host, let reason, _):
       status.host = host
@@ -148,6 +213,35 @@ final class RelayNodeConnection {
     let `protocol`: Int
     let requestId: String
     let command: RelayCommand
+  }
+}
+
+private final class PinnedCertificateDelegate: NSObject, URLSessionDelegate, @unchecked Sendable {
+  private let expected: String
+
+  init(fingerprintSHA256: String) {
+    expected = NearbyNode.normalizeFingerprint(fingerprintSHA256)
+  }
+
+  func urlSession(
+    _ session: URLSession, didReceive challenge: URLAuthenticationChallenge,
+    completionHandler: @escaping (URLSession.AuthChallengeDisposition, URLCredential?) -> Void
+  ) {
+    guard challenge.protectionSpace.authenticationMethod == NSURLAuthenticationMethodServerTrust,
+      let trust = challenge.protectionSpace.serverTrust,
+      let chain = SecTrustCopyCertificateChain(trust) as? [SecCertificate],
+      let leaf = chain.first
+    else {
+      completionHandler(.performDefaultHandling, nil)
+      return
+    }
+    let digest = SHA256.hash(data: SecCertificateCopyData(leaf) as Data)
+      .map { String(format: "%02x", $0) }.joined()
+    guard digest == expected else {
+      completionHandler(.cancelAuthenticationChallenge, nil)
+      return
+    }
+    completionHandler(.useCredential, URLCredential(trust: trust))
   }
 }
 

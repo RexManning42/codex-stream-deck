@@ -7,5 +7,8 @@ OUTPUT="${1:-$ROOT/outputs/codex-deck-launcher-macos-v$VERSION.zip}"
 mkdir -p "${OUTPUT:h}"
 rm -f "$OUTPUT"
 chmod 755 "$ROOT/release/codex-deck-launcher-macos/start-codex-deck.sh" "$ROOT/release/codex-deck-launcher-macos/Start Codex Deck.command"
-ditto -c -k --sequesterRsrc --keepParent "$ROOT/release/codex-deck-launcher-macos" "$OUTPUT"
+# Source archives do not need Finder metadata or local provenance xattrs. Omitting
+# resource forks also avoids a noisy __MACOSX directory in the public ZIP while
+# the ZIP format still preserves the executable mode set above.
+ditto -c -k --norsrc --keepParent "$ROOT/release/codex-deck-launcher-macos" "$OUTPUT"
 echo "macOS launcher archive created: $OUTPUT"

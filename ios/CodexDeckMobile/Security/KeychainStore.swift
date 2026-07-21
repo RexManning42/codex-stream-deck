@@ -2,7 +2,7 @@ import Foundation
 import Security
 
 enum KeychainStore {
-  private static let service = "com.simeo.CodexDeckMobile.relay"
+  private static let service = "\(Bundle.main.bundleIdentifier ?? "com.example.CodexDeckMobile").relay"
 
   static func set(_ value: String, for key: String) throws {
     let data = Data(value.utf8)

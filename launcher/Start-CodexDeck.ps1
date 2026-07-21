@@ -48,6 +48,7 @@ function Install-WatcherBundle {
     (Join-Path $sourceRoot 'Watch-CodexDeck.ps1'),
     (Join-Path $sourceRoot 'Configure-CodexDeckRelay.ps1'),
     (Join-Path $sourceRoot 'Configure-CodexDeckMobile.ps1'),
+    (Join-Path $sourceRoot 'mobile-pairing.mjs'),
     $runtimeSource,
     $wsSource
   )) {
@@ -55,7 +56,7 @@ function Install-WatcherBundle {
   }
 
   New-Item -ItemType Directory -Force -Path (Join-Path $destinationRoot 'node_modules') | Out-Null
-  foreach ($filename in @('Start-CodexDeck.ps1', 'Watch-CodexDeck.ps1', 'Configure-CodexDeckRelay.ps1', 'Configure-CodexDeckMobile.ps1', 'README.txt')) {
+  foreach ($filename in @('Start-CodexDeck.ps1', 'Watch-CodexDeck.ps1', 'Configure-CodexDeckRelay.ps1', 'Configure-CodexDeckMobile.ps1', 'mobile-pairing.mjs', 'README.txt')) {
     $source = Join-Path $sourceRoot $filename
     if (Test-Path -LiteralPath $source) { Copy-Item -LiteralPath $source -Destination (Join-Path $destinationRoot $filename) -Force }
   }

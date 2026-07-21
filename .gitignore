@@ -17,3 +17,4 @@ codex-deck-launcher-*.zip
 .DS_Store
 ios/**/xcuserdata/
 ios/DerivedData/
+ios/Configuration/Local.xcconfig

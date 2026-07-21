@@ -19,6 +19,17 @@ await build({
   minify: false
 });
 
+await build({
+  entryPoints: [resolve("launcher/mobile-pairing-cli.ts")],
+  outfile: resolve(output, "mobile-pairing.mjs"),
+  bundle: true,
+  platform: "node",
+  format: "esm",
+  target: "node20",
+  minify: false,
+  banner: { js: "import { createRequire as __createRequire } from 'node:module'; const require = __createRequire(import.meta.url);" }
+});
+
 await cp(resolve("node_modules/ws"), resolve(output, "node_modules/ws"), { recursive: true });
 
 for (const filename of ["Start Codex Deck.cmd", "Start-CodexDeck.ps1", "Watch-CodexDeck.ps1", "Configure-CodexDeckRelay.ps1", "Configure-CodexDeckMobile.ps1", "README.txt"]) {

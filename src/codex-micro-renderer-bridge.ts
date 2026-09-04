@@ -68,6 +68,15 @@ export const REASONING_ENCODER_KEYS: Record<ReasoningAdjustment, "ENC_CW" | "ENC
   increase: "ENC_CC"
 };
 
+// Codex labels the same conversation two ways: the sidebar row carries a host-prefixed
+// key ("local:<uuid>") while the composer carries the bare uuid. Comparing them as raw
+// strings can never match, so identity is the trailing uuid -- the same rule
+// threadIdentity() in relay-protocol.ts already uses.
+export function threadKeyIdentity(value: string | null | undefined): string {
+  const text = value ?? "";
+  return text.match(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i)?.[0]?.toLowerCase() ?? text;
+}
+
 export type RunnerCallSite = {
   callee: string;
   argIndex: number;
@@ -384,9 +393,9 @@ const SNAPSHOT_EXPRESSION = `(async () => {
     : 'light';
   const activeThreadElement = document.querySelector('[data-app-action-sidebar-thread-id][data-app-action-sidebar-thread-active="true"]')
     ?? document.querySelector('[data-app-action-sidebar-thread-id][aria-current="page"]');
-  const activeThreadKey = document.querySelector('[data-above-composer-conversation-id]')
-    ?.getAttribute('data-above-composer-conversation-id')
-    ?? activeThreadElement?.getAttribute('data-app-action-sidebar-thread-id')
+  const activeThreadKey = activeThreadElement?.getAttribute('data-app-action-sidebar-thread-id')
+    ?? document.querySelector('[data-above-composer-conversation-id]')
+      ?.getAttribute('data-above-composer-conversation-id')
     ?? undefined;
   const activeThreadTitle = activeThreadElement
     ? (activeThreadElement.getAttribute('aria-label') ?? activeThreadElement.textContent ?? '').trim().slice(0, 240) || undefined
@@ -452,7 +461,8 @@ export class CodexMicroRendererBridge {
 
   private async ensureThreadActivated(threadKey: string): Promise<void> {
     const result = await this.evaluate<"active" | "opened" | "missing" | "failed">(`(async () => {
-      const threadKey = ${JSON.stringify(threadKey)};
+      ${threadKeyIdentity.toString()}
+      const wanted = threadKeyIdentity(${JSON.stringify(threadKey)});
       const activeThreadKey = () => document.querySelector('[data-above-composer-conversation-id]')
         ?.getAttribute('data-above-composer-conversation-id')
         ?? document.querySelector('[data-app-action-sidebar-thread-id][data-app-action-sidebar-thread-active="true"]')
@@ -460,17 +470,21 @@ export class CodexMicroRendererBridge {
         ?? document.querySelector('[data-app-action-sidebar-thread-id][aria-current="page"]')
           ?.getAttribute('data-app-action-sidebar-thread-id')
         ?? null;
+      const isActive = () => {
+        const current = activeThreadKey();
+        return current != null && threadKeyIdentity(current) === wanted;
+      };
       const waitForActive = async (duration) => {
         const deadline = Date.now() + duration;
         while (Date.now() < deadline) {
-          if (activeThreadKey() === threadKey) return true;
+          if (isActive()) return true;
           await new Promise((resolve) => setTimeout(resolve, 25));
         }
-        return activeThreadKey() === threadKey;
+        return isActive();
       };
       if (await waitForActive(250)) return 'active';
       const item = [...document.querySelectorAll('[data-app-action-sidebar-thread-id]')]
-        .find((element) => element.getAttribute('data-app-action-sidebar-thread-id') === threadKey);
+        .find((element) => threadKeyIdentity(element.getAttribute('data-app-action-sidebar-thread-id')) === wanted);
       if (!item) return 'missing';
       const selector = 'button, a, [role="button"], [role="link"]';
       const clickable = item.matches(selector) ? item : item.querySelector(selector) ?? item.closest(selector) ?? item;

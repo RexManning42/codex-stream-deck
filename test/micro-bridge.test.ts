@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
 import {
-  collectRunnerCallSites, isRunnerCallSite,
+  collectRunnerCallSites, isRunnerCallSite, threadKeyIdentity,
   REASONING_ENCODER_KEYS, resolveAgentDispatch, retainEvaluationPromise, selectCodexMainTarget
 } from "../src/codex-micro-renderer-bridge.js";
 import { ADDITIONAL_KEYCAPS, OFFICIAL_KEYCAP_IDS } from "../src/keycaps.js";
@@ -187,6 +187,30 @@ test("the runner scan survives nesting, member calls, quoted text and comparison
   // Widening the literal also reaches the encoder call site.
   assert.equal(collectRunnerCallSites("Ce(`x`,`codex_micro_encoder`)", /^codex_micro_hid$/).length, 0);
   assert.equal(collectRunnerCallSites("Ce(`x`,`codex_micro_encoder`)", /^codex_micro_[a-z_]+$/).length, 1);
+});
+
+test("thread identity ignores Codex's host prefix", () => {
+  // Codex labels the same conversation two ways, and comparing them raw never matches --
+  // which made every agent key report a failure it had not had.
+  const bare = "01a067ce-ff7b-7e30-b693-5641e8fa0014";
+  const prefixed = "local:" + bare;
+  assert.equal(threadKeyIdentity(prefixed), bare);
+  assert.equal(threadKeyIdentity(bare), bare);
+  assert.equal(threadKeyIdentity("darwin:" + prefixed), bare);
+  assert.equal(threadKeyIdentity(prefixed.toUpperCase()), bare, "identity is case-insensitive");
+  assert.equal(threadKeyIdentity(prefixed), threadKeyIdentity(bare), "both spellings must agree");
+
+  // Anything without a trailing uuid falls back to the raw value rather than collapsing
+  // to a single bucket, so unrelated keys never compare equal.
+  assert.equal(threadKeyIdentity("client-new-thread"), "client-new-thread");
+  assert.equal(threadKeyIdentity(null), "");
+  assert.notEqual(threadKeyIdentity("local:a"), threadKeyIdentity("local:b"));
+});
+
+test("thread identity is embeddable in the renderer expression", () => {
+  const text = threadKeyIdentity.toString();
+  assert.doesNotMatch(text, /:\s*(?:string|number|boolean)\b/);
+  assert.doesNotMatch(text, /\bas\s+(?:const|string)\b/);
 });
 
 test("the runner scan is embeddable in the renderer expression", () => {

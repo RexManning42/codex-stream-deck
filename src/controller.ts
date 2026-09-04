@@ -13,7 +13,7 @@ import { getOrCreateHostIdentity } from "./host-identity.js";
 import type { OfficialKeycapId } from "./keycaps.js";
 import { HostActivityIndex, type HostSnapshot, type RelayCommand } from "./relay-protocol.js";
 import {
-  BUILTIN_LABELS, KEYCAP_LABELS,
+  BUILTIN_GROUPS, BUILTIN_LABELS, KEYCAP_GROUPS, KEYCAP_LABELS, type KeyGroup,
   renderAgentKey, renderBuiltinKeycap, renderFallbackKeycap, renderHostTargetKey, renderImportedKeycap,
   renderRateLimitResetKey, renderUsageLimitKey, renderUsageOverviewKey, type BuiltinIconName
 } from "./render.js";
@@ -26,10 +26,10 @@ import type {
 import { selectAccountUsageSource, selectUsageWindow, type AccountUsageSource } from "./usage.js";
 
 export type FixedIconSource =
-  // `label` overrides the caption derived from the keycap id, for keys that borrow another
+  // `label` overrides the caption and `accent` the group hue, for keys that borrow another
   // keycap's artwork but do a different job.
-  | { kind: "local"; keycapId: string; label?: string }
-  | { kind: "builtin"; name: BuiltinIconName };
+  | { kind: "local"; keycapId: string; label?: string; accent?: KeyGroup }
+  | { kind: "builtin"; name: BuiltinIconName; accent?: KeyGroup };
 
 type FixedIconRegistration = { action: KeyAction; source: FixedIconSource };
 type AgentRegistration = { action: KeyAction; slot: number };
@@ -456,8 +456,9 @@ export class DeckController {
   private async renderFixedAction(registration: FixedIconRegistration): Promise<void> {
     const theme = this.targetSnapshot()?.theme ?? "dark";
     const image = registration.source.kind === "builtin"
-      ? renderBuiltinKeycap(registration.source.name, theme, BUILTIN_LABELS[registration.source.name])
-      : await this.keycapImage(registration.source.keycapId, theme, registration.source.label);
+      ? renderBuiltinKeycap(registration.source.name, theme, BUILTIN_LABELS[registration.source.name],
+        registration.source.accent ?? BUILTIN_GROUPS[registration.source.name])
+      : await this.keycapImage(registration.source.keycapId, theme, registration.source.label, registration.source.accent);
     if (image) await this.setImage(registration.action, image);
   }
 
@@ -597,16 +598,19 @@ export class DeckController {
     }, 200);
   }
 
-  private keycapImage(keycapId: string, theme: "light" | "dark", labelOverride?: string): Promise<string | null> {
-    const cacheKey = `${theme}:${keycapId}:${labelOverride ?? ""}`;
+  private keycapImage(keycapId: string, theme: "light" | "dark", labelOverride?: string, accentOverride?: KeyGroup): Promise<string | null> {
+    const accent = accentOverride ?? KEYCAP_GROUPS[keycapId];
+    // The accent belongs in the key: Plan and Branch Review both draw BRCH.svg but want
+    // different hues, so without it whichever rendered first would win for both.
+    const cacheKey = `${theme}:${keycapId}:${labelOverride ?? ""}:${accent ?? ""}`;
     let pending = this.keycapImages.get(cacheKey);
     if (pending) return pending;
     // A missing icon deliberately keeps the raw id as its centred label, so an absent
     // file stays obvious instead of hiding behind a friendly name.
     const label = labelOverride ?? KEYCAP_LABELS[keycapId] ?? keycapId;
     pending = readFile(join(USER_ICON_ROOT, `${keycapId}.svg`), "utf8")
-      .then((svg) => renderImportedKeycap(svg, theme, label))
-      .catch(() => renderFallbackKeycap(keycapId, theme));
+      .then((svg) => renderImportedKeycap(svg, theme, label, accent))
+      .catch(() => renderFallbackKeycap(keycapId, theme, accent));
     this.keycapImages.set(cacheKey, pending);
     return pending;
   }

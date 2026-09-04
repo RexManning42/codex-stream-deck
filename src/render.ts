@@ -45,13 +45,13 @@ const SURFACES: Record<ThemeMode, SurfacePalette> = {
 // to carry the meaning. Keyed by the official Codex Micro keycap id.
 export const KEYCAP_LABELS: Record<string, string> = {
   FAST: "Fast", APPR: "Approve", REJ: "Reject", SPLIT: "Fork",
-  MIC: "Mic", MIC1: "Mic", CODEX: "Codex", BUG: "Bug", OAI: "Docs",
-  TERM: "Terminal", DWN: "Download", DEL: "Delete", NEW: "New Task",
-  NAV: "Navigate", MAGIC: "Magic", DIFF: "Diff", PLAY: "Run",
-  GIT: "Commit", BRCH: "Branch", BRANCH: "Branch", MRG: "Merge", PR: "Pull Req",
-  PAINT: "Paint", LAB: "Lab", PARTY: "Party", TIME: "History",
+  MIC: "Mic", MIC1: "Mic", CODEX: "Submit", BUG: "Feedback", OAI: "Docs",
+  TERM: "Terminal", DWN: "Copy MD", DEL: "Archive", NEW: "New Task",
+  NAV: "Browser", MAGIC: "Pin", DIFF: "Review", PLAY: "Run",
+  GIT: "Commit", BRCH: "Draft PR", BRANCH: "New Branch", MRG: "Merge PR", PR: "Pull Req",
+  PAINT: "Photos", LAB: "Settings", PARTY: "Side Chat", TIME: "Tasks",
   "MIND+": "Effort +", "MIND-": "Effort \u2212",
-  SETUP: "Settings", FOLD: "Folder", UPL: "Upload", APPS: "Apps",
+  SETUP: "Settings", FOLD: "Folder", UPL: "Add Files", APPS: "Skills",
   YOLO: "YOLO", YEET: "YEET",
   EMPT1: "", EMPT2: "", EMPT3: "", EMPT4: "", EMPT5: ""
 };

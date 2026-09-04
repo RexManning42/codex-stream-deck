@@ -203,7 +203,7 @@ abstract class DirectKeycapAction extends SingletonAction {
 @action({ UUID: "com.simeo.codex-deck.fork" }) export class Fork extends MicroKeyAction { constructor(c: DeckController) { super(c, "ACT09"); } }
 @action({ UUID: "com.simeo.codex-deck.dictation" }) export class Dictation extends MicroKeyAction { constructor(c: DeckController) { super(c, "ACT10_ACT11"); } }
 @action({ UUID: "com.simeo.codex-deck.send" }) export class Send extends MicroKeyAction { constructor(c: DeckController) { super(c, "ACT12"); } }
-@action({ UUID: "com.simeo.codex-deck.plan" }) export class Plan extends JoystickAction { constructor(c: DeckController) { super(c, "up", { kind: "local", keycapId: "BRCH" }); } }
+@action({ UUID: "com.simeo.codex-deck.plan" }) export class Plan extends JoystickAction { constructor(c: DeckController) { super(c, "up", { kind: "local", keycapId: "BRCH", label: "Plan Mode" }); } }
 @action({ UUID: "com.simeo.codex-deck.back" }) export class Back extends JoystickAction { constructor(c: DeckController) { super(c, "left", { kind: "builtin", name: "back" }); } }
 @action({ UUID: "com.simeo.codex-deck.forward" }) export class Forward extends JoystickAction { constructor(c: DeckController) { super(c, "right", { kind: "builtin", name: "forward" }); } }
 @action({ UUID: "com.simeo.codex-deck.sidebar" }) export class Sidebar extends JoystickAction { constructor(c: DeckController) { super(c, "down", { kind: "builtin", name: "sidebar" }); } }

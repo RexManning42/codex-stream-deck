@@ -10,7 +10,7 @@ import {
   KeycapPullRequest, KeycapReasoningDown, KeycapReasoningUp, KeycapReject, KeycapSettings,
   KeycapSideChat, KeycapSkills, KeycapSplit, KeycapTasks, KeycapTerminal,
   Plan, RateLimitReset, Reasoning, ReasoningDown, ReasoningUp, Send, Sidebar,
-  UsageLimit, UsageOverview
+  UsageLimit, UsageOverview, AttentionDial, ContextDial
 } from "./actions.js";
 
 const controller = new DeckController();
@@ -26,6 +26,7 @@ for (const pluginAction of [
   new Fork(controller), new Dictation(controller), new Send(controller),
   new Plan(controller), new Reasoning(controller), new ReasoningDown(controller), new ReasoningUp(controller), new NewTask(controller),
   new HostToggle(controller),
+  new ContextDial(controller), new AttentionDial(controller),
   new UsageLimit(controller), new UsageOverview(controller), new RateLimitReset(controller),
   new Back(controller), new Forward(controller), new Sidebar(controller),
   new KeycapFast(controller), new KeycapApprove(controller), new KeycapReject(controller),

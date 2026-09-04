@@ -122,3 +122,24 @@ test("animated agent payload stays inside budget", () => {
   const url = renderAgentKey(0, "Refactor the bridge", "thinking", true, 4, "dark", "M", "ready", 84, true);
   assert.ok(url.length < 8000, `agent data URL grew to ${url.length}`);
 });
+
+test("dial selection ranks context by fullness and attention by who is blocked", async () => {
+  const { selectDialSlots } = await import("../src/controller.js");
+  const slot = (id: number, status: string, ctx?: number, key: string | null = `t${id}`) =>
+    ({ id, threadKey: key, title: `Task ${id}`, status, selected: false, contextUsedPercent: ctx });
+  const slots = [
+    slot(0, "idle", 12), slot(1, "awaiting-approval", 40), slot(2, "working", 91),
+    slot(3, "error", 5), slot(4, "idle", undefined), slot(5, "off", 99, null)
+  ] as never[];
+
+  // Context opens on the task closest to filling its window, and ignores empty slots.
+  const context = selectDialSlots(slots, "context");
+  assert.deepEqual(context.map((s) => s.id), [2, 1, 0, 3, 4]);
+  assert.ok(!context.some((s) => s.threadKey === null), "an unassigned slot is not a task");
+
+  // Attention is only what is blocked on you, in slot order so the first push is the
+  // one that has been waiting longest.
+  const attention = selectDialSlots(slots, "attention");
+  assert.deepEqual(attention.map((s) => s.id), [1, 3]);
+  assert.deepEqual(selectDialSlots([slot(0, "idle", 5)] as never[], "attention"), []);
+});

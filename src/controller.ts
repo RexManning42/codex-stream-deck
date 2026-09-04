@@ -1,4 +1,4 @@
-import streamDeck, { type KeyAction } from "@elgato/streamdeck";
+import streamDeck, { type DialAction, type KeyAction } from "@elgato/streamdeck";
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { codexDeckStateRoot } from "./codex-deck-paths.js";
@@ -13,17 +13,34 @@ import { getOrCreateHostIdentity } from "./host-identity.js";
 import type { OfficialKeycapId } from "./keycaps.js";
 import { HostActivityIndex, type HostSnapshot, type RelayCommand } from "./relay-protocol.js";
 import {
-  BUILTIN_GROUPS, BUILTIN_LABELS, KEYCAP_GROUPS, KEYCAP_LABELS, type KeyGroup,
+  BUILTIN_GROUPS, BUILTIN_LABELS, KEYCAP_GROUPS, KEYCAP_LABELS, SIGNAL_COLORS, type KeyGroup,
   renderAgentKey, renderBuiltinKeycap, renderFallbackKeycap, renderHostTargetKey, renderImportedKeycap,
   renderRateLimitResetKey, renderUsageLimitKey, renderUsageOverviewKey, type BuiltinIconName
 } from "./render.js";
 import { openCodexThread } from "./codex-open.js";
 import { visualStatusFromMicro } from "./status.js";
 import type {
-  CodexHost, HostHealth, MicroActionSlot, MicroDirection, MicroSnapshot, ReasoningAdjustment,
+  CodexHost, HostHealth, MicroActionSlot, MicroAgentSlot, MicroDirection, MicroSnapshot, ReasoningAdjustment,
   RoutedAgentSlot, UsageLimitMode, UsageWindowKind
 } from "./types.js";
 import { selectAccountUsageSource, selectUsageWindow, type AccountUsageSource } from "./usage.js";
+
+export type DialKind = "context" | "attention";
+
+// Which tasks a dial offers, and in what order. Context ranks by how full the window is
+// so the dial lands on the task closest to trouble; attention lists only what is actually
+// blocked on you, in slot order, so the first push goes to the longest-waiting key.
+export function selectDialSlots(slots: MicroAgentSlot[], kind: DialKind): MicroAgentSlot[] {
+  if (kind === "attention") {
+    return slots.filter((slot) => {
+      const status = visualStatusFromMicro(slot.status);
+      return status === "input" || status === "error";
+    });
+  }
+  return [...slots]
+    .filter((slot) => slot.threadKey)
+    .sort((a, b) => (b.contextUsedPercent ?? -1) - (a.contextUsedPercent ?? -1));
+}
 
 export type FixedIconSource =
   // `label` overrides the caption and `accent` the group hue, for keys that borrow another
@@ -47,6 +64,10 @@ export class DeckController {
   private readonly agents = new Map<string, AgentRegistration>();
   private readonly microActions = new Map<string, MicroActionRegistration>();
   private readonly fixedActions = new Map<string, FixedIconRegistration>();
+  private readonly dials = new Map<string, { action: DialAction; kind: DialKind }>();
+  // Which slot the context dial is parked on. Survives re-renders so the reading does
+  // not jump back while you are scrubbing.
+  private contextScrub = 0;
   private readonly keycapImages = new Map<string, Promise<string | null>>();
   private readonly lastImages = new Map<string, string>();
   private readonly hostToggleActions = new Map<string, KeyAction>();
@@ -208,6 +229,38 @@ export class DeckController {
 
   unregisterFixedAction(action: ActionIdentity): void {
     this.unregister(action, this.fixedActions);
+  }
+
+  registerDial(kind: DialKind, action: DialAction): void {
+    this.dials.set(action.id, { action, kind });
+    void this.renderDial({ action, kind });
+  }
+
+  unregisterDial(action: ActionIdentity): void {
+    this.unregister(action, this.dials);
+  }
+
+  scrubDial(kind: DialKind, ticks: number): void {
+    const slots = this.dialSlots(kind);
+    if (!slots.length) return;
+    const span = slots.length;
+    this.contextScrub = ((this.contextScrub + ticks) % span + span) % span;
+    void Promise.all([...this.dials.values()]
+      .filter((registration) => registration.kind === kind)
+      .map((registration) => this.renderDial(registration)));
+  }
+
+  async activateDial(kind: DialKind): Promise<void> {
+    const slots = this.dialSlots(kind);
+    if (!slots.length) return;
+    // Attention always jumps to the first task waiting; context opens whatever you scrubbed to.
+    const target = kind === "attention" ? slots[0] : slots[this.contextScrub % slots.length];
+    if (!target) return;
+    await this.sendAgent(target.id, 1);
+  }
+
+  private dialSlots(kind: DialKind): MicroAgentSlot[] {
+    return selectDialSlots(this.targetSnapshot()?.slots ?? [], kind);
   }
 
   registerHostToggle(action: KeyAction): void {
@@ -414,7 +467,8 @@ export class DeckController {
       ...[...this.hostToggleActions.values()].map((action) => this.renderHostToggle(action)),
       ...[...this.usageLimitActions.values()].map((registration) => this.renderUsageLimit(registration)),
       ...[...this.usageOverviewActions.values()].map((action) => this.renderUsageOverview(action)),
-      ...[...this.rateLimitResetActions.values()].map((action) => this.renderRateLimitReset(action))
+      ...[...this.rateLimitResetActions.values()].map((action) => this.renderRateLimitReset(action)),
+      ...[...this.dials.values()].map((registration) => this.renderDial(registration))
     ]);
   }
 
@@ -460,6 +514,32 @@ export class DeckController {
         registration.source.accent ?? BUILTIN_GROUPS[registration.source.name])
       : await this.keycapImage(registration.source.keycapId, theme, registration.source.label, registration.source.accent);
     if (image) await this.setImage(registration.action, image);
+  }
+
+  private async renderDial({ action, kind }: { action: DialAction; kind: DialKind }): Promise<void> {
+    const slots = this.dialSlots(kind);
+    const signal = SIGNAL_COLORS[this.targetSnapshot()?.theme ?? "dark"];
+
+    if (kind === "attention") {
+      const waiting = slots.length;
+      const first = slots[0];
+      await action.setFeedback({
+        title: waiting === 0 ? "Nothing waiting" : waiting === 1 ? "1 task waiting" : `${waiting} tasks waiting`,
+        value: waiting === 0 ? "\u2014" : (first?.title ?? "Task").slice(0, 24),
+        indicator: { value: waiting === 0 ? 0 : 100, bar_fill_c: waiting === 0 ? signal.idle : signal.input }
+      });
+      return;
+    }
+
+    const slot = slots.length ? slots[this.contextScrub % slots.length] : undefined;
+    const percent = slot?.contextUsedPercent;
+    // Context fills toward trouble, so the bar warms as it approaches full.
+    const fill = percent == null ? signal.idle : percent >= 92 ? signal.error : percent >= 80 ? signal.input : signal.thinking;
+    await action.setFeedback({
+      title: slot?.title ? slot.title.slice(0, 24) : "No task",
+      value: percent == null ? "\u2014" : `${Math.round(percent)}%`,
+      indicator: { value: percent == null ? 0 : Math.max(0, Math.min(100, Math.round(percent))), bar_fill_c: fill }
+    });
   }
 
   private async renderHostToggle(action: KeyAction): Promise<void> {

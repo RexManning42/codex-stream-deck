@@ -13,7 +13,8 @@ import { getOrCreateHostIdentity } from "./host-identity.js";
 import type { OfficialKeycapId } from "./keycaps.js";
 import { HostActivityIndex, type HostSnapshot, type RelayCommand } from "./relay-protocol.js";
 import {
-  BUILTIN_GROUPS, BUILTIN_LABELS, KEYCAP_GROUPS, KEYCAP_LABELS, SIGNAL_COLORS, type KeyGroup,
+  BUILTIN_GROUPS, BUILTIN_LABELS, KEYCAP_GROUPS, KEYCAP_LABELS, type KeyGroup,
+  renderAttentionStrip, renderContextStrip,
   renderAgentKey, renderBuiltinKeycap, renderFallbackKeycap, renderHostTargetKey, renderImportedKeycap,
   renderRateLimitResetKey, renderUsageLimitKey, renderUsageOverviewKey, type BuiltinIconName
 } from "./render.js";
@@ -233,7 +234,14 @@ export class DeckController {
 
   registerDial(kind: DialKind, action: DialAction): void {
     this.dials.set(action.id, { action, kind });
-    void this.renderDial({ action, kind });
+    // Set the layout explicitly rather than trusting the manifest to reach an instance
+    // that already exists, then clear the cache so the first paint always lands.
+    void action.setFeedbackLayout("layouts/codex-strip.json")
+      .then(() => {
+        this.lastImages.delete(action.id);
+        return this.renderDial({ action, kind });
+      })
+      .catch((error) => streamDeck.logger.error(`Dial layout failed: ${String(error)}`));
   }
 
   unregisterDial(action: ActionIdentity): void {
@@ -518,28 +526,26 @@ export class DeckController {
 
   private async renderDial({ action, kind }: { action: DialAction; kind: DialKind }): Promise<void> {
     const slots = this.dialSlots(kind);
-    const signal = SIGNAL_COLORS[this.targetSnapshot()?.theme ?? "dark"];
+    const theme = this.targetSnapshot()?.theme ?? "dark";
 
-    if (kind === "attention") {
-      const waiting = slots.length;
-      const first = slots[0];
-      await action.setFeedback({
-        title: waiting === 0 ? "Nothing waiting" : waiting === 1 ? "1 task waiting" : `${waiting} tasks waiting`,
-        value: waiting === 0 ? "\u2014" : (first?.title ?? "Task").slice(0, 24),
-        indicator: { value: waiting === 0 ? 0 : 100, bar_fill_c: waiting === 0 ? signal.idle : signal.input }
-      });
-      return;
-    }
+    // One full-bleed pixmap per segment, so the strip is drawn with the same material as
+    // the keys rather than Elgato's stock text-and-bar layout.
+    const svg = kind === "attention"
+      ? renderAttentionStrip(slots.length, slots[0]?.title ?? undefined, theme)
+      : (() => {
+        const index = slots.length ? this.contextScrub % slots.length : 0;
+        const slot = slots[index];
+        return renderContextStrip(
+          slot?.title ?? undefined,
+          slot?.contextUsedPercent,
+          slots.length > 1 ? `${index + 1}/${slots.length}` : undefined,
+          theme
+        );
+      })();
 
-    const slot = slots.length ? slots[this.contextScrub % slots.length] : undefined;
-    const percent = slot?.contextUsedPercent;
-    // Context fills toward trouble, so the bar warms as it approaches full.
-    const fill = percent == null ? signal.idle : percent >= 92 ? signal.error : percent >= 80 ? signal.input : signal.thinking;
-    await action.setFeedback({
-      title: slot?.title ? slot.title.slice(0, 24) : "No task",
-      value: percent == null ? "\u2014" : `${Math.round(percent)}%`,
-      indicator: { value: percent == null ? 0 : Math.max(0, Math.min(100, Math.round(percent))), bar_fill_c: fill }
-    });
+    if (this.lastImages.get(action.id) === svg) return;
+    this.lastImages.set(action.id, svg);
+    await action.setFeedback({ full: `data:image/svg+xml;base64,${Buffer.from(svg, "utf8").toString("base64")}` });
   }
 
   private async renderHostToggle(action: KeyAction): Promise<void> {

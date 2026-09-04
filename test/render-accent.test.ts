@@ -143,3 +143,53 @@ test("dial selection ranks context by fullness and attention by who is blocked",
   assert.deepEqual(attention.map((s) => s.id), [1, 3]);
   assert.deepEqual(selectDialSlots([slot(0, "idle", 5)] as never[], "attention"), []);
 });
+
+test("the context strip reports fill, and warms as the window closes", async () => {
+  const { renderContextStrip, SIGNAL_COLORS } = await import("../src/render.js");
+  const at = (pct: number | undefined) => renderContextStrip("Refactor the bridge", pct, "1/5", "dark");
+
+  assert.match(at(19), /data-strip-value="19"/);
+  assert.match(at(19), />19%</);
+  assert.match(at(19), new RegExp(SIGNAL_COLORS.dark.thinking), "healthy fill is the working colour");
+  assert.match(at(84), new RegExp(SIGNAL_COLORS.dark.input), "past 80 it warns");
+  assert.match(at(96), new RegExp(SIGNAL_COLORS.dark.error), "past 92 it alarms");
+
+  // Unknown is not zero: an unmeasured window must not read as an empty one.
+  assert.match(at(undefined), /data-strip-value="unknown"/);
+  assert.doesNotMatch(at(undefined), />0%</);
+
+  // A long task title is truncated rather than overrunning the 200px segment.
+  const long = renderContextStrip("Compare 2.4GHz and 5GHz LTE antennas for the roof", 40, undefined, "dark");
+  assert.match(long, /…/);
+  assert.doesNotMatch(long, /antennas for the roof/);
+});
+
+test("the attention strip counts what is blocked, in pips as well as digits", async () => {
+  const { renderAttentionStrip } = await import("../src/render.js");
+  const pips = (svg: string) => (svg.match(/y="72" width="11"/g) ?? []).length;
+
+  const clear = renderAttentionStrip(0, undefined, "dark");
+  assert.match(clear, /data-strip-waiting="0"/);
+  assert.match(clear, /ALL CLEAR/);
+  assert.equal(pips(clear), 6, "all six slots are always drawn, lit or not");
+
+  const three = renderAttentionStrip(3, "Fix the failing test", "dark");
+  assert.match(three, /data-strip-waiting="3"/);
+  assert.match(three, /WAITING ON YOU/);
+  assert.match(three, />3</);
+  // Countable without reading the number, and legible without relying on hue.
+  assert.equal((three.match(/fill-opacity="1"/g) ?? []).length, 3);
+});
+
+test("strip segments are valid standalone SVG and stay off pure black", async () => {
+  const { renderAttentionStrip, renderContextStrip } = await import("../src/render.js");
+  for (const theme of ["light", "dark"] as const) {
+    for (const svg of [renderContextStrip("Task", 55, "1/3", theme), renderAttentionStrip(2, "Task", theme)]) {
+      // Pixmap takes a raw SVG string, so it must carry its own namespace and box.
+      assert.match(svg, /^<svg xmlns="http:\/\/www\.w3\.org\/2000\/svg"/);
+      assert.match(svg, /viewBox="0 0 200 100"/);
+      assert.match(svg, /<\/svg>$/);
+      assert.doesNotMatch(svg, /#000(?:000)?\b/i);
+    }
+  }
+});

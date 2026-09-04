@@ -243,6 +243,89 @@ function keycapChassis(theme: ThemeMode, accent?: KeyGroup): { defs: string; lay
   return { defs, layers, ink };
 }
 
+// The touch strip gives each dial a 200x100 segment, and a pixmap layout item accepts a
+// raw SVG string -- so the segment is drawn here rather than assembled from Elgato's stock
+// text-and-bar layout. That keeps the dials in the same material and palette as the keys.
+const STRIP_W = 200;
+const STRIP_H = 100;
+
+function stripEllipsis(value: string, budget: number): string {
+  const text = value.replace(/\s+/g, " ").trim();
+  return text.length <= budget ? text : `${text.slice(0, Math.max(0, budget - 1)).trimEnd()}…`;
+}
+
+function stripChassis(theme: ThemeMode, glow: string): string {
+  const surface = SURFACES[theme];
+  const depth = DEPTHS[theme];
+  return `<defs>`
+    + `<linearGradient id="cdStripBody" x1="0" y1="0" x2="0" y2="1"><stop stop-color="${depth.bodyHigh}"/><stop offset=".55" stop-color="${surface.keyMiddle}"/><stop offset="1" stop-color="${surface.keyBottom}"/></linearGradient>`
+    + `<radialGradient id="cdStripBloom" cx="50%" cy="108%" r="72%"><stop stop-color="${glow}" stop-opacity="${theme === "dark" ? ".34" : ".22"}"/><stop offset="1" stop-color="${glow}" stop-opacity="0"/></radialGradient>`
+    + `<linearGradient id="cdStripTop" x1="0" y1="0" x2="0" y2="1"><stop stop-color="${depth.specular}" stop-opacity="${theme === "dark" ? ".10" : ".55"}"/><stop offset="1" stop-color="${depth.specular}" stop-opacity="0"/></linearGradient>`
+    + `</defs>`
+    + `<rect x="0" y="0" width="${STRIP_W}" height="${STRIP_H}" fill="url(#cdStripBody)"/>`
+    + `<rect x="0" y="0" width="${STRIP_W}" height="${STRIP_H}" fill="url(#cdStripBloom)"/>`
+    + `<rect x="0" y="0" width="${STRIP_W}" height="26" fill="url(#cdStripTop)"/>`
+    + `<rect x="0" y="${STRIP_H - 2}" width="${STRIP_W}" height="2" fill="${glow}" fill-opacity="${theme === "dark" ? ".55" : ".42"}"/>`;
+}
+
+const STRIP_FONT = `font-family="${KEY_LABEL_FONT}"`;
+
+function stripLabel(text: string, surface: SurfacePalette): string {
+  return `<text x="12" y="21" ${STRIP_FONT} font-size="11" font-weight="700" letter-spacing="1.6" fill="${surface.title}" fill-opacity=".52">${escapeXml(text)}</text>`;
+}
+
+/** Context-window fill for one task: the number that says how much room is left to work in. */
+export function renderContextStrip(
+  title: string | undefined,
+  usedPercent: number | undefined,
+  position: string | undefined,
+  theme: ThemeMode = "dark"
+): string {
+  const surface = SURFACES[theme];
+  const signal = SIGNAL_COLORS[theme];
+  // Warms as the window fills, on the same thresholds the agent tiles use.
+  const glow = usedPercent == null ? signal.empty
+    : usedPercent >= 92 ? signal.error : usedPercent >= 80 ? signal.input : signal.thinking;
+  const value = usedPercent == null ? "—" : `${Math.round(usedPercent)}%`;
+  const filled = Math.max(0, Math.min(100, usedPercent ?? 0)) / 100;
+
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="${STRIP_W}" height="${STRIP_H}" viewBox="0 0 ${STRIP_W} ${STRIP_H}">`
+    + stripChassis(theme, glow)
+    + stripLabel("CONTEXT", surface)
+    + (position ? `<text x="188" y="21" text-anchor="end" ${STRIP_FONT} font-size="11" font-weight="600" fill="${surface.title}" fill-opacity=".42">${escapeXml(position)}</text>` : "")
+    + `<text data-strip-value="${usedPercent == null ? "unknown" : Math.round(usedPercent)}" x="12" y="56" ${STRIP_FONT} font-size="30" font-weight="700" fill="${surface.title}">${value}</text>`
+    + `<text x="188" y="56" text-anchor="end" ${STRIP_FONT} font-size="13" font-weight="600" fill="${surface.title}" fill-opacity=".78">${escapeXml(stripEllipsis(title ?? "No task", 18))}</text>`
+    + `<rect x="12" y="72" width="176" height="12" rx="6" fill="${surface.title}" fill-opacity=".13"/>`
+    + (filled > 0 ? `<rect x="12" y="72" width="${(176 * filled).toFixed(1)}" height="12" rx="6" fill="${glow}"/>` : "")
+    + `</svg>`;
+}
+
+/** How many tasks are blocked on you, so the deck is readable from across the room. */
+export function renderAttentionStrip(
+  waiting: number,
+  title: string | undefined,
+  theme: ThemeMode = "dark"
+): string {
+  const surface = SURFACES[theme];
+  const signal = SIGNAL_COLORS[theme];
+  const glow = waiting === 0 ? signal.complete : signal.input;
+
+  // One pip per agent slot, lit for the ones that want you: countable at a glance and
+  // legible without relying on the colour.
+  const pips = Array.from({ length: 6 }, (_, index) => {
+    const lit = index < waiting;
+    return `<rect x="${12 + index * 15}" y="72" width="11" height="12" rx="3" fill="${lit ? glow : surface.title}" fill-opacity="${lit ? "1" : ".13"}"/>`;
+  }).join("");
+
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="${STRIP_W}" height="${STRIP_H}" viewBox="0 0 ${STRIP_W} ${STRIP_H}">`
+    + stripChassis(theme, glow)
+    + stripLabel(waiting === 0 ? "ALL CLEAR" : "WAITING ON YOU", surface)
+    + `<text data-strip-waiting="${waiting}" x="12" y="56" ${STRIP_FONT} font-size="30" font-weight="700" fill="${surface.title}">${waiting === 0 ? "—" : String(waiting)}</text>`
+    + `<text x="188" y="56" text-anchor="end" ${STRIP_FONT} font-size="13" font-weight="600" fill="${surface.title}" fill-opacity="${waiting === 0 ? ".5" : ".82"}">${escapeXml(waiting === 0 ? "Nothing blocked" : stripEllipsis(title ?? "Task", 18))}</text>`
+    + pips
+    + `</svg>`;
+}
+
 export function renderAgentKey(slot: number, title: string, status: AgentVisualStatus, selected = false, phase = 0, theme: ThemeMode = "light", hostBadge?: string, hostHealth: HostHealthState = "ready", contextUsedPercent?: number, showContextRing = true): string {
   return toDataUrl(renderAgentSvg(slot, title, status, selected, phase, theme, hostBadge, hostHealth, contextUsedPercent, showContextRing));
 }

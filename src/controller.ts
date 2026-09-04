@@ -26,7 +26,9 @@ import type {
 import { selectAccountUsageSource, selectUsageWindow, type AccountUsageSource } from "./usage.js";
 
 export type FixedIconSource =
-  | { kind: "local"; keycapId: string }
+  // `label` overrides the caption derived from the keycap id, for keys that borrow another
+  // keycap's artwork but do a different job.
+  | { kind: "local"; keycapId: string; label?: string }
   | { kind: "builtin"; name: BuiltinIconName };
 
 type FixedIconRegistration = { action: KeyAction; source: FixedIconSource };
@@ -455,7 +457,7 @@ export class DeckController {
     const theme = this.targetSnapshot()?.theme ?? "dark";
     const image = registration.source.kind === "builtin"
       ? renderBuiltinKeycap(registration.source.name, theme, BUILTIN_LABELS[registration.source.name])
-      : await this.keycapImage(registration.source.keycapId, theme);
+      : await this.keycapImage(registration.source.keycapId, theme, registration.source.label);
     if (image) await this.setImage(registration.action, image);
   }
 
@@ -595,13 +597,13 @@ export class DeckController {
     }, 200);
   }
 
-  private keycapImage(keycapId: string, theme: "light" | "dark"): Promise<string | null> {
-    const cacheKey = `${theme}:${keycapId}`;
+  private keycapImage(keycapId: string, theme: "light" | "dark", labelOverride?: string): Promise<string | null> {
+    const cacheKey = `${theme}:${keycapId}:${labelOverride ?? ""}`;
     let pending = this.keycapImages.get(cacheKey);
     if (pending) return pending;
     // A missing icon deliberately keeps the raw id as its centred label, so an absent
     // file stays obvious instead of hiding behind a friendly name.
-    const label = KEYCAP_LABELS[keycapId] ?? keycapId;
+    const label = labelOverride ?? KEYCAP_LABELS[keycapId] ?? keycapId;
     pending = readFile(join(USER_ICON_ROOT, `${keycapId}.svg`), "utf8")
       .then((svg) => renderImportedKeycap(svg, theme, label))
       .catch(() => renderFallbackKeycap(keycapId, theme));

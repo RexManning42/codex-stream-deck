@@ -103,7 +103,7 @@ class EncoderAction extends SingletonAction {
   constructor(private readonly controller: DeckController) { super(); }
 
   override onWillAppear(ev: WillAppearEvent): void {
-    if (ev.action.isKey()) this.controller.registerFixedAction("reasoning", ev.action, { kind: "local", keycapId: "MIND-" });
+    if (ev.action.isKey()) this.controller.registerFixedAction("reasoning", ev.action, { kind: "local", keycapId: "MIND-", label: "Knob Click" });
   }
 
   override onWillDisappear(ev: WillDisappearEvent): void {

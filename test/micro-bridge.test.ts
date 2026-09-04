@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
 import {
+  collectRunnerCallSites, isRunnerCallSite,
   REASONING_ENCODER_KEYS, resolveAgentDispatch, retainEvaluationPromise, selectCodexMainTarget
 } from "../src/codex-micro-renderer-bridge.js";
 import { ADDITIONAL_KEYCAPS, OFFICIAL_KEYCAP_IDS } from "../src/keycaps.js";
@@ -144,10 +145,58 @@ test("standalone keycaps resolve Codex's live registry instead of hardcoding com
   assert.match(source, /codex-micro-layout-/);
   assert.match(source, /keycapGetter/);
   assert.match(source, /codex-micro-bridge-/);
-  assert.match(source, /runnerLocal/);
-  assert.match(source, /\\\\w/);
-  assert.match(source, /import\\\\s/);
   assert.match(source, /codex_micro_hid/);
+  // Codex's getter returns its first keycap for an unknown id, so this identity check is
+  // what stops a dropped keycap from silently firing FAST.
+  assert.match(source, /keycap\.id !== wanted/);
+});
+
+test("the runner scan admits Codex's two-argument call and rejects its three-argument gate", () => {
+  // Verbatim shapes from Codex 26.831's codex-micro-bridge module.
+  const twoArg = collectRunnerCallSites("Ce(`composer.startVoiceMode`,`codex_micro_hid`)", /^codex_micro_hid$/);
+  assert.deepEqual(twoArg, [{ callee: "Ce", argIndex: 1, argCount: 2, literalFirstArg: true, member: false }]);
+  assert.equal(isRunnerCallSite(twoArg[0]!), true);
+
+  const ternary = collectRunnerCallSites(
+    "Ce(e===`short-press`?`realtimeVoice.toggleMicrophoneMute`:`realtimeVoice.endCall`,`codex_micro_hid`)",
+    /^codex_micro_hid$/
+  );
+  assert.equal(ternary.length, 1);
+  assert.equal(ternary[0]!.argCount, 2);
+  assert.equal(ternary[0]!.literalFirstArg, false);
+  assert.equal(isRunnerCallSite(ternary[0]!), true);
+
+  // The capability gate takes a context first. Counting arguments is the only way to tell
+  // it apart from the runner, which is precisely what a regex cannot do.
+  const gate = collectRunnerCallSites("!tn(i,c.command,`codex_micro_hid`)", /^codex_micro_hid$/);
+  assert.deepEqual(gate, [{ callee: "tn", argIndex: 2, argCount: 3, literalFirstArg: false, member: false }]);
+  assert.equal(isRunnerCallSite(gate[0]!), false);
+});
+
+test("the runner scan survives nesting, member calls, quoted text and comparisons", () => {
+  const nested = collectRunnerCallSites("run(wrap(a,b),`codex_micro_hid`)", /^codex_micro_hid$/);
+  assert.equal(nested[0]!.argCount, 2, "a nested call must not be counted as an extra argument");
+
+  const member = collectRunnerCallSites("obj.run(c,`codex_micro_hid`)", /^codex_micro_hid$/);
+  assert.equal(member[0]!.member, true);
+  assert.equal(isRunnerCallSite(member[0]!), false, "member expressions are not resolvable import bindings");
+
+  assert.deepEqual(collectRunnerCallSites("const s=\"),`codex_micro_hid`)\";", /^codex_micro_hid$/), []);
+  assert.deepEqual(collectRunnerCallSites("e===`codex_micro_hid`&&i(`steer`)", /^codex_micro_hid$/), []);
+
+  // Widening the literal also reaches the encoder call site.
+  assert.equal(collectRunnerCallSites("Ce(`x`,`codex_micro_encoder`)", /^codex_micro_hid$/).length, 0);
+  assert.equal(collectRunnerCallSites("Ce(`x`,`codex_micro_encoder`)", /^codex_micro_[a-z_]+$/).length, 1);
+});
+
+test("the runner scan is embeddable in the renderer expression", () => {
+  // Both are stringified into a CDP Runtime.evaluate payload, so neither may carry
+  // TypeScript-only syntax after compilation.
+  for (const fn of [collectRunnerCallSites, isRunnerCallSite]) {
+    const text = fn.toString();
+    assert.doesNotMatch(text, /:\s*(?:string|number|boolean|RegExp|RunnerCallSite)\b/);
+    assert.doesNotMatch(text, /\bas\s+(?:const|string|number)\b/);
+  }
 });
 
 test("controller avoids overlapping polls and redundant image writes", async () => {

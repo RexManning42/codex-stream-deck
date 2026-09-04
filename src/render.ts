@@ -41,6 +41,36 @@ const SURFACES: Record<ThemeMode, SurfacePalette> = {
   }
 };
 
+// Friendly labels drawn at the bottom of each key so the glyph alone does not have
+// to carry the meaning. Keyed by the official Codex Micro keycap id.
+export const KEYCAP_LABELS: Record<string, string> = {
+  FAST: "Fast", APPR: "Approve", REJ: "Reject", SPLIT: "Fork",
+  MIC: "Mic", MIC1: "Mic", CODEX: "Codex", BUG: "Bug", OAI: "Docs",
+  TERM: "Terminal", DWN: "Download", DEL: "Delete", NEW: "New Task",
+  NAV: "Navigate", MAGIC: "Magic", DIFF: "Diff", PLAY: "Run",
+  GIT: "Commit", BRCH: "Branch", BRANCH: "Branch", MRG: "Merge", PR: "Pull Req",
+  PAINT: "Paint", LAB: "Lab", PARTY: "Party", TIME: "History",
+  "MIND+": "Effort +", "MIND-": "Effort \u2212",
+  SETUP: "Settings", FOLD: "Folder", UPL: "Upload", APPS: "Apps",
+  YOLO: "YOLO", YEET: "YEET",
+  EMPT1: "", EMPT2: "", EMPT3: "", EMPT4: "", EMPT5: ""
+};
+
+export const BUILTIN_LABELS: Record<BuiltinIconName, string> = {
+  back: "Back", forward: "Forward", sidebar: "Sidebar", home: "Home", navigation: "Navigate"
+};
+
+const KEY_LABEL_FONT = "SF Pro Text, -apple-system, Bahnschrift, Segoe UI Variable Display, Segoe UI, Helvetica Neue, Arial, sans-serif";
+
+// Bottom-centred caption. Returns "" when there is nothing to draw, so callers can
+// keep the original full-size glyph geometry.
+function keyLabelMarkup(label: string | undefined, surface: SurfacePalette): string {
+  const text = (label ?? "").trim();
+  if (!text) return "";
+  const size = text.length > 9 ? 14 : text.length > 7 ? 16 : 18;
+  return `<text data-key-label="1" x="72" y="122" text-anchor="middle" font-family="${KEY_LABEL_FONT}" font-size="${size}" font-weight="600" letter-spacing=".2" fill="${surface.title}" fill-opacity=".92">${escapeXml(text)}</text>`;
+}
+
 export function renderAgentKey(slot: number, title: string, status: AgentVisualStatus, selected = false, phase = 0, theme: ThemeMode = "light", hostBadge?: string, hostHealth: HostHealthState = "ready", contextUsedPercent?: number, showContextRing = true): string {
   return toDataUrl(renderAgentSvg(slot, title, status, selected, phase, theme, hostBadge, hostHealth, contextUsedPercent, showContextRing));
 }
@@ -89,7 +119,7 @@ export function toDataUrl(svg: string): string {
   return `data:image/svg+xml;charset=utf8,${encodeURIComponent(svg)}`;
 }
 
-export function renderImportedKeycap(svg: string, theme: ThemeMode = "light"): string {
+export function renderImportedKeycap(svg: string, theme: ThemeMode = "light", label?: string): string {
   const viewBox = svg.match(/viewBox=["']([^"']+)["']/i)?.[1];
   const rootAttributes = svg.match(/<svg\b([^>]*)>/i)?.[1] ?? "";
   const body = svg.match(/<svg\b[^>]*>([\s\S]*?)<\/svg>/i)?.[1];
@@ -101,10 +131,14 @@ export function renderImportedKeycap(svg: string, theme: ThemeMode = "light"): s
 
   const surface = SURFACES[theme];
   const glyphColor = theme === "dark" ? "#F2F2EE" : "#24292D";
-  const size = 90;
+  const caption = keyLabelMarkup(label, surface);
+  // Shrink and lift the glyph only when a caption is drawn, so unlabelled keys are unchanged.
+  const size = caption ? 76 : 90;
+  const originY = caption ? 16 : 27;
+  const originX = (144 - size) / 2;
   const scale = Math.min(size / width, size / height);
-  const x = 27 + (size - width * scale) / 2 - minX * scale;
-  const y = 27 + (size - height * scale) / 2 - minY * scale;
+  const x = originX + (size - width * scale) / 2 - minX * scale;
+  const y = originY + (size - height * scale) / 2 - minY * scale;
   const glyph = body
     .replaceAll("currentColor", glyphColor)
     .replace(/#(?:000000|000|ffffff|fff)\b/gi, glyphColor)
@@ -117,10 +151,11 @@ export function renderImportedKeycap(svg: string, theme: ThemeMode = "light"): s
     <rect x="7.5" y="7.5" width="129" height="129" rx="15" fill="none" stroke="${surface.innerBorder}" stroke-width="1"/>
     <path d="M16 18C45 8 101 8 128 20" fill="none" stroke="${surface.sheen}" stroke-width="6" stroke-linecap="round" opacity="${theme === "dark" ? "0" : ".72"}"/>
     <g data-icon-source="local-user-file" transform="translate(${x.toFixed(3)} ${y.toFixed(3)}) scale(${scale.toFixed(5)})" fill="${inheritedFill}" color="${glyphColor}">${glyph}</g>
+    ${caption}
   </svg>`);
 }
 
-export function renderBuiltinKeycap(name: BuiltinIconName, theme: ThemeMode = "light"): string {
+export function renderBuiltinKeycap(name: BuiltinIconName, theme: ThemeMode = "light", label?: string): string {
   const surface = SURFACES[theme];
   const glyphColor = theme === "dark" ? "#F2F2EE" : "#24292D";
   const glyphs: Record<BuiltinIconName, string> = {
@@ -130,12 +165,14 @@ export function renderBuiltinKeycap(name: BuiltinIconName, theme: ThemeMode = "l
     home: `<path d="M40 60l32-27 32 27M50 56v35h44V56M65 91V70h14v21"/>`,
     navigation: `<circle cx="58" cy="48" r="6"/><circle cx="86" cy="48" r="6"/><circle cx="58" cy="76" r="6"/><circle cx="86" cy="76" r="6"/>`
   };
+  const caption = keyLabelMarkup(label, surface);
   return toDataUrl(`<svg xmlns="http://www.w3.org/2000/svg" width="144" height="144" viewBox="0 0 144 144">
     <defs><linearGradient id="keycap" x1="0" y1="0" x2="0" y2="1"><stop stop-color="${surface.keyTop}"/><stop offset=".52" stop-color="${surface.keyMiddle}"/><stop offset="1" stop-color="${surface.keyBottom}"/></linearGradient></defs>
     <rect data-theme="${theme}" x="4" y="4" width="136" height="136" rx="18" fill="url(#keycap)" stroke="${surface.border}" stroke-width="2" stroke-opacity="${theme === "dark" ? ".88" : ".34"}"/>
     <rect x="7.5" y="7.5" width="129" height="129" rx="15" fill="none" stroke="${surface.innerBorder}" stroke-width="1"/>
     <path d="M16 18C45 8 101 8 128 20" fill="none" stroke="${surface.sheen}" stroke-width="6" stroke-linecap="round" opacity="${theme === "dark" ? "0" : ".72"}"/>
-    <g data-icon-source="codex-deck-original" fill="none" stroke="${glyphColor}" stroke-width="5" stroke-linecap="round" stroke-linejoin="round" transform="translate(0 10)">${glyphs[name]}</g>
+    <g data-icon-source="codex-deck-original" fill="none" stroke="${glyphColor}" stroke-width="5" stroke-linecap="round" stroke-linejoin="round" transform="translate(0 ${caption ? 0 : 10})">${glyphs[name]}</g>
+    ${caption}
   </svg>`);
 }
 

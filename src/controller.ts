@@ -13,6 +13,7 @@ import { getOrCreateHostIdentity } from "./host-identity.js";
 import type { OfficialKeycapId } from "./keycaps.js";
 import { HostActivityIndex, type HostSnapshot, type RelayCommand } from "./relay-protocol.js";
 import {
+  BUILTIN_LABELS, KEYCAP_LABELS,
   renderAgentKey, renderBuiltinKeycap, renderFallbackKeycap, renderHostTargetKey, renderImportedKeycap,
   renderRateLimitResetKey, renderUsageLimitKey, renderUsageOverviewKey, type BuiltinIconName
 } from "./render.js";
@@ -453,7 +454,7 @@ export class DeckController {
   private async renderFixedAction(registration: FixedIconRegistration): Promise<void> {
     const theme = this.targetSnapshot()?.theme ?? "dark";
     const image = registration.source.kind === "builtin"
-      ? renderBuiltinKeycap(registration.source.name, theme)
+      ? renderBuiltinKeycap(registration.source.name, theme, BUILTIN_LABELS[registration.source.name])
       : await this.keycapImage(registration.source.keycapId, theme);
     if (image) await this.setImage(registration.action, image);
   }
@@ -598,8 +599,11 @@ export class DeckController {
     const cacheKey = `${theme}:${keycapId}`;
     let pending = this.keycapImages.get(cacheKey);
     if (pending) return pending;
+    // A missing icon deliberately keeps the raw id as its centred label, so an absent
+    // file stays obvious instead of hiding behind a friendly name.
+    const label = KEYCAP_LABELS[keycapId] ?? keycapId;
     pending = readFile(join(USER_ICON_ROOT, `${keycapId}.svg`), "utf8")
-      .then((svg) => renderImportedKeycap(svg, theme))
+      .then((svg) => renderImportedKeycap(svg, theme, label))
       .catch(() => renderFallbackKeycap(keycapId, theme));
     this.keycapImages.set(cacheKey, pending);
     return pending;

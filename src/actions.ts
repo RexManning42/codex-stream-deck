@@ -1,5 +1,5 @@
 import streamDeck, { action, type DialDownEvent, type DialRotateEvent, type DidReceiveSettingsEvent, type KeyDownEvent, type KeyUpEvent, type SendToPluginEvent, type WillAppearEvent, type WillDisappearEvent, SingletonAction } from "@elgato/streamdeck";
-import type { CommandSettings, DeckController, FixedIconSource } from "./controller.js";
+import type { CommandSettings, DeckController, DialKind, FixedIconSource } from "./controller.js";
 import type { OfficialKeycapId } from "./keycaps.js";
 import type { MicroActionSlot, MicroDirection, ReasoningAdjustment } from "./types.js";
 import { parseUsageLimitMode } from "./usage.js";
@@ -35,7 +35,7 @@ abstract class AgentAction extends SingletonAction {
 // Dials show a live reading on the touch strip and act on turn or push. Both are fed
 // from the same snapshot poll the keys use, so they cost no extra bridge traffic.
 abstract class DialGauge extends SingletonAction {
-  constructor(private readonly controller: DeckController, private readonly kind: "context" | "attention") { super(); }
+  constructor(private readonly controller: DeckController, private readonly kind: DialKind) { super(); }
 
   override onWillAppear(ev: WillAppearEvent): void {
     if (ev.action.isDial()) this.controller.registerDial(this.kind, ev.action);
@@ -105,6 +105,12 @@ export class ContextDial extends DialGauge { constructor(c: DeckController) { su
 
 @action({ UUID: "com.simeo.codex-deck.attention-dial" })
 export class AttentionDial extends DialGauge { constructor(c: DeckController) { super(c, "attention"); } }
+
+@action({ UUID: "com.simeo.codex-deck.usage-dial" })
+export class UsageDial extends DialGauge { constructor(c: DeckController) { super(c, "usage"); } }
+
+@action({ UUID: "com.simeo.codex-deck.chats-dial" })
+export class ChatsDial extends DialGauge { constructor(c: DeckController) { super(c, "chats"); } }
 
 @action({ UUID: "com.simeo.codex-deck.agent-1" }) export class Agent1 extends AgentAction { constructor(c: DeckController) { super(c, 0); } }
 @action({ UUID: "com.simeo.codex-deck.agent-2" }) export class Agent2 extends AgentAction { constructor(c: DeckController) { super(c, 1); } }

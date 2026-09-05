@@ -326,6 +326,66 @@ export function renderAttentionStrip(
     + `</svg>`;
 }
 
+/** Both usage windows on one strip segment, with the shorter one leading. */
+export function renderUsageStrip(
+  windows: UsageWindow[],
+  resetCredits: number | null,
+  theme: ThemeMode = "dark",
+  health: HostHealthState = "ready"
+): string {
+  const surface = SURFACES[theme];
+  const pick = (kind: UsageWindowKind) => windows.find((window) => window.kind === kind);
+  const rows: Array<{ label: string; window: UsageWindow | undefined }> = [
+    { label: "5H", window: pick("five-hour") },
+    { label: "WK", window: pick("weekly") }
+  ];
+  const lead = rows.find((row) => row.window)?.window;
+  const leadRemaining = lead ? Math.round(clampPercent(lead.remainingPercent)) : null;
+  const glow = usageSignal(leadRemaining, health, theme);
+
+  const bars = rows.map((row, index) => {
+    const y = 44 + index * 24;
+    const remaining = row.window ? Math.round(clampPercent(row.window.remainingPercent)) : null;
+    const fill = usageSignal(remaining, health, theme);
+    const width = remaining == null ? 0 : (120 * remaining) / 100;
+    return `<text x="12" y="${y + 10}" ${STRIP_FONT} font-size="13" font-weight="700" fill="${surface.title}" fill-opacity=".62">${row.label}</text>`
+      + `<rect x="38" y="${y}" width="120" height="13" rx="6.5" fill="${surface.title}" fill-opacity=".13"/>`
+      + (width > 0 ? `<rect x="38" y="${y}" width="${width.toFixed(1)}" height="13" rx="6.5" fill="${fill}"/>` : "")
+      + `<text data-usage-strip="${row.label}" x="188" y="${y + 11}" text-anchor="end" ${STRIP_FONT} font-size="13" font-weight="700" fill="${surface.title}" fill-opacity="${remaining == null ? ".4" : ".9"}">${remaining == null ? "—" : `${remaining}%`}</text>`;
+  }).join("");
+
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="${STRIP_W}" height="${STRIP_H}" viewBox="0 0 ${STRIP_W} ${STRIP_H}">`
+    + stripChassis(theme, glow)
+    + stripLabel("USAGE LEFT", surface)
+    + (resetCredits != null && resetCredits > 0
+      ? `<text x="188" y="21" text-anchor="end" ${STRIP_FONT} font-size="11" font-weight="700" fill="${glow}">${resetCredits} reset${resetCredits === 1 ? "" : "s"}</text>`
+      : "")
+    + bars
+    + `</svg>`;
+}
+
+/** One conversation from the sidebar, for scrubbing with a dial. */
+export function renderChatStrip(
+  title: string | undefined,
+  position: number,
+  total: number,
+  theme: ThemeMode = "dark"
+): string {
+  const surface = SURFACES[theme];
+  const glow = KEY_ACCENTS[theme].nav.glow;
+  const [line1, line2] = splitTitle(title ?? "No conversations");
+
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="${STRIP_W}" height="${STRIP_H}" viewBox="0 0 ${STRIP_W} ${STRIP_H}">`
+    + stripChassis(theme, glow)
+    + stripLabel("CONVERSATION", surface)
+    + (total > 0 ? `<text x="188" y="21" text-anchor="end" ${STRIP_FONT} font-size="11" font-weight="600" fill="${surface.title}" fill-opacity=".45">${position + 1}/${total}</text>` : "")
+    + `<text data-chat-strip="${escapeXml(title ?? "")}" x="12" y="52" ${STRIP_FONT} font-size="15" font-weight="650" fill="${surface.title}">${escapeXml(line1)}</text>`
+    + (line2 ? `<text x="12" y="72" ${STRIP_FONT} font-size="15" font-weight="650" fill="${surface.title}" fill-opacity=".72">${escapeXml(line2)}</text>` : "")
+    + `<rect x="12" y="84" width="176" height="3" rx="1.5" fill="${surface.title}" fill-opacity=".12"/>`
+    + (total > 1 ? `<rect x="${(12 + (176 * position) / total).toFixed(1)}" y="84" width="${Math.max(10, 176 / total).toFixed(1)}" height="3" rx="1.5" fill="${glow}"/>` : "")
+    + `</svg>`;
+}
+
 export function renderAgentKey(slot: number, title: string, status: AgentVisualStatus, selected = false, phase = 0, theme: ThemeMode = "light", hostBadge?: string, hostHealth: HostHealthState = "ready", contextUsedPercent?: number, showContextRing = true): string {
   return toDataUrl(renderAgentSvg(slot, title, status, selected, phase, theme, hostBadge, hostHealth, contextUsedPercent, showContextRing));
 }

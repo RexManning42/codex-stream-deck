@@ -8,14 +8,14 @@ import {
 } from "./control-target.js";
 import { CodexRelayClient, readRelayClientConfig } from "./codex-relay-client.js";
 import { CodexRelayServer, readRelayServerConfig } from "./codex-relay-server.js";
-import { CodexMicroRendererBridge, type CodexCommand } from "./codex-micro-renderer-bridge.js";
+import { CodexMicroRendererBridge, type CodexCommand, type CodexThread } from "./codex-micro-renderer-bridge.js";
 import { getOrCreateHostIdentity } from "./host-identity.js";
 import type { OfficialKeycapId } from "./keycaps.js";
 import { HostActivityIndex, type HostSnapshot, type RelayCommand } from "./relay-protocol.js";
 import {
   BUILTIN_GROUPS, BUILTIN_LABELS, COMMAND_GROUP_ACCENTS, humanizeCommand,
   KEYCAP_GROUPS, KEYCAP_LABELS, renderCommandKey, type KeyGroup,
-  renderAttentionStrip, renderContextStrip,
+  renderAttentionStrip, renderChatStrip, renderContextStrip, renderUsageStrip,
   renderAgentKey, renderBuiltinKeycap, renderFallbackKeycap, renderHostTargetKey, renderImportedKeycap,
   renderRateLimitResetKey, renderUsageLimitKey, renderUsageOverviewKey, type BuiltinIconName
 } from "./render.js";
@@ -27,7 +27,7 @@ import type {
 } from "./types.js";
 import { selectAccountUsageSource, selectUsageWindow, type AccountUsageSource } from "./usage.js";
 
-export type DialKind = "context" | "attention";
+export type DialKind = "context" | "attention" | "usage" | "chats";
 
 export type CommandSettings = { commandId?: string; label?: string };
 type CommandRegistration = { action: KeyAction; settings: CommandSettings };
@@ -75,6 +75,11 @@ export class DeckController {
   // Which slot the context dial is parked on. Survives re-renders so the reading does
   // not jump back while you are scrubbing.
   private contextScrub = 0;
+  private chatScrub = 0;
+  // Sidebar conversations are polled rather than pushed, so keep the last read for the
+  // dial to scrub through between refreshes.
+  private threads: CodexThread[] = [];
+  private threadsReadAt = 0;
   private readonly keycapImages = new Map<string, Promise<string | null>>();
   private readonly lastImages = new Map<string, string>();
   private readonly hostToggleActions = new Map<string, KeyAction>();
@@ -307,6 +312,16 @@ export class DeckController {
   }
 
   scrubDial(kind: DialKind, ticks: number): void {
+    if (kind === "chats") {
+      const span = this.threads.length;
+      if (!span) return;
+      this.chatScrub = ((this.chatScrub + ticks) % span + span) % span;
+      void Promise.all([...this.dials.values()]
+        .filter((registration) => registration.kind === "chats")
+        .map((registration) => this.renderDial(registration)));
+      return;
+    }
+    if (kind === "usage") return; // the usage gauge shows both windows at once
     const slots = this.dialSlots(kind);
     if (!slots.length) return;
     const span = slots.length;
@@ -317,6 +332,12 @@ export class DeckController {
   }
 
   async activateDial(kind: DialKind): Promise<void> {
+    if (kind === "usage") return;
+    if (kind === "chats") {
+      const thread = this.threads[this.chatScrub % Math.max(1, this.threads.length)];
+      if (thread) await this.microBridge.openThread(thread.threadKey);
+      return;
+    }
     const slots = this.dialSlots(kind);
     if (!slots.length) return;
     // Attention always jumps to the first task waiting; context opens whatever you scrubbed to.
@@ -526,6 +547,7 @@ export class DeckController {
   }
 
   private async renderAll(): Promise<void> {
+    await this.refreshThreads();
     await Promise.all([
       ...[...this.agents.values()].map((registration) => this.renderAgent(registration)),
       ...[...this.microActions.values()].map((registration) => this.renderMicroAction(registration)),
@@ -583,13 +605,33 @@ export class DeckController {
     if (image) await this.setImage(registration.action, image);
   }
 
+  // Sidebar conversations are only read when a chat dial is actually on the deck, and at a
+  // slower cadence than the snapshot poll: the list changes when you start or open a chat,
+  // not continuously.
+  private async refreshThreads(): Promise<void> {
+    if (![...this.dials.values()].some((registration) => registration.kind === "chats")) return;
+    if (Date.now() - this.threadsReadAt < 5000) return;
+    this.threadsReadAt = Date.now();
+    try { this.threads = await this.microBridge.listThreads(); }
+    catch { /* leave the previous list in place; the dial keeps showing what it had */ }
+  }
+
   private async renderDial({ action, kind }: { action: DialAction; kind: DialKind }): Promise<void> {
     const slots = this.dialSlots(kind);
     const theme = this.targetSnapshot()?.theme ?? "dark";
 
     // One full-bleed pixmap per segment, so the strip is drawn with the same material as
     // the keys rather than Elgato's stock text-and-bar layout.
-    const svg = kind === "attention"
+    const svg = kind === "usage"
+      ? (() => {
+        const source = this.accountUsageSource();
+        return renderUsageStrip(source.snapshot?.usage?.windows ?? [],
+          source.snapshot?.usage?.resetCreditsAvailable ?? null, theme, source.health.state);
+      })()
+      : kind === "chats"
+      ? renderChatStrip(this.threads[this.chatScrub % Math.max(1, this.threads.length)]?.title,
+        this.threads.length ? this.chatScrub % this.threads.length : 0, this.threads.length, theme)
+      : kind === "attention"
       ? renderAttentionStrip(slots.length, slots[0]?.title ?? undefined, theme)
       : (() => {
         const index = slots.length ? this.contextScrub % slots.length : 0;

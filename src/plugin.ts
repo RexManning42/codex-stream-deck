@@ -10,7 +10,7 @@ import {
   KeycapPullRequest, KeycapReasoningDown, KeycapReasoningUp, KeycapReject, KeycapSettings,
   KeycapSideChat, KeycapSkills, KeycapSplit, KeycapTasks, KeycapTerminal,
   Plan, RateLimitReset, Reasoning, ReasoningDown, ReasoningUp, Send, Sidebar,
-  UsageLimit, UsageOverview, AttentionDial, ContextDial, RunCommand
+  UsageLimit, UsageOverview, AttentionDial, ContextDial, RunCommand, ChatsDial, UsageDial
 } from "./actions.js";
 
 const controller = new DeckController();
@@ -27,6 +27,7 @@ for (const pluginAction of [
   new Plan(controller), new Reasoning(controller), new ReasoningDown(controller), new ReasoningUp(controller), new NewTask(controller),
   new HostToggle(controller),
   new ContextDial(controller), new AttentionDial(controller), new RunCommand(controller),
+  new UsageDial(controller), new ChatsDial(controller),
   new UsageLimit(controller), new UsageOverview(controller), new RateLimitReset(controller),
   new Back(controller), new Forward(controller), new Sidebar(controller),
   new KeycapFast(controller), new KeycapApprove(controller), new KeycapReject(controller),

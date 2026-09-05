@@ -233,3 +233,37 @@ test("generic commands never cross the relay", async () => {
   assert.doesNotMatch(protocol, /kind: "command"/, "the relay command union must stay closed");
   assert.doesNotMatch(protocol, /value\.kind === "command"/);
 });
+
+test("the usage strip shows both windows and flags reset credits", async () => {
+  const { renderUsageStrip } = await import("../src/render.js");
+  const windows = [
+    { id: "a", kind: "five-hour", usedPercent: 26, remainingPercent: 74, windowDurationMins: 300, resetsAt: null },
+    { id: "b", kind: "weekly", usedPercent: 88, remainingPercent: 12, windowDurationMins: 10080, resetsAt: null }
+  ] as never[];
+
+  const svg = renderUsageStrip(windows, 2, "dark", "ready");
+  assert.match(svg, /data-usage-strip="5H"/);
+  assert.match(svg, /data-usage-strip="WK"/);
+  assert.match(svg, />74%</);
+  assert.match(svg, />12%</);
+  assert.match(svg, />2 resets</, "credits are worth surfacing when you have them");
+  assert.doesNotMatch(renderUsageStrip(windows, 0, "dark", "ready"), /resets</, "zero credits is not news");
+
+  // A window Codex did not report must read as unknown, never as spent.
+  const partial = renderUsageStrip([windows[0]!], null, "dark", "ready");
+  assert.match(partial, /data-usage-strip="WK"[^>]*>—</);
+  assert.doesNotMatch(renderUsageStrip(windows, 2, "light", "ready"), /#000(?:000)?\b/i);
+});
+
+test("the conversation strip wraps titles and tracks position", async () => {
+  const { renderChatStrip } = await import("../src/render.js");
+  const svg = renderChatStrip("Compare 2.4GHz and 5GHz LTE antennas", 3, 17, "dark");
+  assert.match(svg, /data-chat-strip="Compare 2\.4GHz and 5GHz LTE antennas"/);
+  assert.match(svg, />4\/17</, "position is 1-based for a human");
+  assert.match(svg, /viewBox="0 0 200 100"/);
+
+  const empty = renderChatStrip(undefined, 0, 0, "dark");
+  assert.match(empty, /No conversations/);
+  assert.doesNotMatch(empty, /\d+\/0/, "an empty list has no position to show");
+  assert.doesNotMatch(renderChatStrip("Task", 0, 1, "light"), /#000(?:000)?\b/i);
+});

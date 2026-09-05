@@ -153,6 +153,13 @@ const COMMAND_RUNNER_SOURCE = `
         // reporting no active handler, not a reason to try a different function.
 `;
 
+export type CodexThread = {
+  threadKey: string;
+  title: string;
+  pinned: boolean;
+  active: boolean;
+};
+
 export type CodexCommand = {
   id: string;
   /** "webview" commands reach the runner; "electron-only" ones resolve but never handle. */
@@ -663,6 +670,41 @@ export class CodexMicroRendererBridge {
       }));
     })()`;
     return await this.evaluate<CodexCommand[]>(expression);
+  }
+
+  /**
+   * Conversations in Codex's sidebar. Micro slot signals only cover the six Codex agent
+   * slots and go empty in ChatGPT mode, so chat-side features read the sidebar instead.
+   */
+  async listThreads(limit = 24): Promise<CodexThread[]> {
+    await this.ensureConnected();
+    const expression = `(() => {
+      const rows = [...document.querySelectorAll('[data-app-action-sidebar-thread-id]')];
+      const seen = new Set();
+      const threads = [];
+      for (const row of rows) {
+        const threadKey = row.getAttribute('data-app-action-sidebar-thread-id');
+        if (!threadKey || seen.has(threadKey)) continue;
+        seen.add(threadKey);
+        const title = row.getAttribute('data-app-action-sidebar-thread-title')
+          ?? row.getAttribute('aria-label') ?? '';
+        threads.push({
+          threadKey,
+          title: String(title).replace(/\s+/g, ' ').trim().slice(0, 120),
+          pinned: row.getAttribute('data-app-action-sidebar-thread-pinned') === 'true',
+          active: row.getAttribute('data-app-action-sidebar-thread-active') === 'true'
+        });
+        if (threads.length >= ${Math.max(1, Math.min(64, Math.trunc(limit)))}) break;
+      }
+      return threads;
+    })()`;
+    return await this.evaluate<CodexThread[]>(expression);
+  }
+
+  /** Opens a sidebar conversation by its thread key. */
+  async openThread(threadKey: string): Promise<void> {
+    await this.ensureConnected();
+    await this.ensureThreadActivated(threadKey);
   }
 
   async sendAction(slot: MicroActionSlot, act: 0 | 1): Promise<void> {

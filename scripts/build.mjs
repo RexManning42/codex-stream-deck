@@ -25,6 +25,7 @@ for (const filename of [
 await cp(resolve("static/manifest.json"), resolve(output, "manifest.json"));
 await cp(resolve("static/property-inspector/usage-limit.html"), resolve(output, "static/property-inspector/usage-limit.html"));
 await cp(resolve("static/property-inspector/agent.html"), resolve(output, "static/property-inspector/agent.html"));
+await cp(resolve("static/property-inspector/command.html"), resolve(output, "static/property-inspector/command.html"));
 // Custom encoder layout. The strip segment is drawn as one full-bleed pixmap so the
 // dials can use the same material as the keys instead of a stock text-and-bar layout.
 await mkdir(resolve(output, "layouts"), { recursive: true });

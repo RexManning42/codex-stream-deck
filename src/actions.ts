@@ -1,5 +1,5 @@
-import streamDeck, { action, type DialDownEvent, type DialRotateEvent, type DidReceiveSettingsEvent, type KeyDownEvent, type KeyUpEvent, type WillAppearEvent, type WillDisappearEvent, SingletonAction } from "@elgato/streamdeck";
-import type { DeckController, FixedIconSource } from "./controller.js";
+import streamDeck, { action, type DialDownEvent, type DialRotateEvent, type DidReceiveSettingsEvent, type KeyDownEvent, type KeyUpEvent, type SendToPluginEvent, type WillAppearEvent, type WillDisappearEvent, SingletonAction } from "@elgato/streamdeck";
+import type { CommandSettings, DeckController, FixedIconSource } from "./controller.js";
 import type { OfficialKeycapId } from "./keycaps.js";
 import type { MicroActionSlot, MicroDirection, ReasoningAdjustment } from "./types.js";
 import { parseUsageLimitMode } from "./usage.js";
@@ -54,6 +54,48 @@ abstract class DialGauge extends SingletonAction {
     catch (error) {
       streamDeck.logger.error(`Dial ${this.kind} failed: ${String(error)}`);
       if (ev.action.isDial()) await ev.action.showAlert();
+    }
+  }
+}
+
+// One action for any of the ~156 commands in Codex's registry, chosen in the property
+// inspector. Replaces writing a class per command: only ~29 of them have Micro keycap
+// artwork, and the rest were unreachable purely because nothing exposed them.
+@action({ UUID: "com.simeo.codex-deck.command" })
+export class RunCommand extends SingletonAction<CommandSettings> {
+  constructor(private readonly controller: DeckController) { super(); }
+
+  override onWillAppear(ev: WillAppearEvent<CommandSettings>): void {
+    if (ev.action.isKey()) this.controller.registerCommand(ev.action, ev.payload.settings ?? {});
+  }
+
+  override onWillDisappear(ev: WillDisappearEvent<CommandSettings>): void {
+    this.controller.unregisterCommand(ev.action);
+  }
+
+  override onDidReceiveSettings(ev: DidReceiveSettingsEvent<CommandSettings>): void {
+    if (ev.action.isKey()) this.controller.registerCommand(ev.action, ev.payload.settings ?? {});
+  }
+
+  // The picker asks for the catalogue on open; it is read live from Codex so it follows
+  // app updates rather than a list baked at build time.
+  override async onSendToPlugin(ev: SendToPluginEvent<{ request?: string }, CommandSettings>): Promise<void> {
+    if (ev.payload?.request !== "commands") return;
+    try {
+      const commands = await this.controller.listCommands();
+      await streamDeck.ui.sendToPropertyInspector({ commands });
+    } catch (error) {
+      await streamDeck.ui.sendToPropertyInspector({ error: String(error) });
+    }
+  }
+
+  override async onKeyDown(ev: KeyDownEvent<CommandSettings>): Promise<void> {
+    const commandId = ev.payload.settings?.commandId;
+    if (!commandId) { if (ev.action.isKey()) await ev.action.showAlert(); return; }
+    try { await this.controller.runCommand(commandId); }
+    catch (error) {
+      streamDeck.logger.error(`Command ${commandId} failed: ${String(error)}`);
+      if (ev.action.isKey()) await ev.action.showAlert();
     }
   }
 }

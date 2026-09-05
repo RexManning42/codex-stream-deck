@@ -8,12 +8,13 @@ import {
 } from "./control-target.js";
 import { CodexRelayClient, readRelayClientConfig } from "./codex-relay-client.js";
 import { CodexRelayServer, readRelayServerConfig } from "./codex-relay-server.js";
-import { CodexMicroRendererBridge } from "./codex-micro-renderer-bridge.js";
+import { CodexMicroRendererBridge, type CodexCommand } from "./codex-micro-renderer-bridge.js";
 import { getOrCreateHostIdentity } from "./host-identity.js";
 import type { OfficialKeycapId } from "./keycaps.js";
 import { HostActivityIndex, type HostSnapshot, type RelayCommand } from "./relay-protocol.js";
 import {
-  BUILTIN_GROUPS, BUILTIN_LABELS, KEYCAP_GROUPS, KEYCAP_LABELS, type KeyGroup,
+  BUILTIN_GROUPS, BUILTIN_LABELS, COMMAND_GROUP_ACCENTS, humanizeCommand,
+  KEYCAP_GROUPS, KEYCAP_LABELS, renderCommandKey, type KeyGroup,
   renderAttentionStrip, renderContextStrip,
   renderAgentKey, renderBuiltinKeycap, renderFallbackKeycap, renderHostTargetKey, renderImportedKeycap,
   renderRateLimitResetKey, renderUsageLimitKey, renderUsageOverviewKey, type BuiltinIconName
@@ -27,6 +28,9 @@ import type {
 import { selectAccountUsageSource, selectUsageWindow, type AccountUsageSource } from "./usage.js";
 
 export type DialKind = "context" | "attention";
+
+export type CommandSettings = { commandId?: string; label?: string };
+type CommandRegistration = { action: KeyAction; settings: CommandSettings };
 
 // Which tasks a dial offers, and in what order. Context ranks by how full the window is
 // so the dial lands on the task closest to trouble; attention lists only what is actually
@@ -66,6 +70,8 @@ export class DeckController {
   private readonly microActions = new Map<string, MicroActionRegistration>();
   private readonly fixedActions = new Map<string, FixedIconRegistration>();
   private readonly dials = new Map<string, { action: DialAction; kind: DialKind }>();
+  private readonly commandActions = new Map<string, CommandRegistration>();
+  private commandCatalogue?: Promise<CodexCommand[]>;
   // Which slot the context dial is parked on. Survives re-renders so the reading does
   // not jump back while you are scrubbing.
   private contextScrub = 0;
@@ -230,6 +236,58 @@ export class DeckController {
 
   unregisterFixedAction(action: ActionIdentity): void {
     this.unregister(action, this.fixedActions);
+  }
+
+  registerCommand(action: KeyAction, settings: CommandSettings): void {
+    this.commandActions.set(action.id, { action, settings });
+    void this.renderCommandAction({ action, settings });
+  }
+
+  unregisterCommand(action: ActionIdentity): void {
+    this.unregister(action, this.commandActions);
+  }
+
+  async runCommand(commandId: string): Promise<void> {
+    // Deliberately local-only. The relay validates a closed set of commands, and `keycap`
+    // accepts only ids from OFFICIAL_KEYCAP_IDS; carrying a free-form command id across it
+    // would let a paired host invoke anything in Codex's registry, archiveThread and
+    // git.mergePullRequest included. Not worth widening that for a convenience feature.
+    if (this.isRemoteTarget()) {
+      throw new Error("Commands run on the local computer only; switch the target back to this host.");
+    }
+    await this.microBridge.runCommand(commandId);
+  }
+
+  /**
+   * Codex's registry, read once per connection. The property inspector asks for this to
+   * populate its picker, so it must not re-scan every asset on each keypress.
+   */
+  async listCommands(): Promise<CodexCommand[]> {
+    this.commandCatalogue ??= this.microBridge.listCommands()
+      .catch((error) => { this.commandCatalogue = undefined; throw error; });
+    return await this.commandCatalogue;
+  }
+
+  private async renderCommandAction({ action, settings }: CommandRegistration): Promise<void> {
+    const theme = this.targetSnapshot()?.theme ?? "dark";
+    const commandId = settings.commandId;
+    if (!commandId) {
+      await this.setImage(action, renderCommandKey("Pick a command", theme));
+      return;
+    }
+    const known = (await this.listCommands().catch(() => [] as CodexCommand[]))
+      .find((command) => command.id === commandId);
+    const accent = (known?.keycapId ? KEYCAP_GROUPS[known.keycapId] : undefined)
+      ?? (known?.group ? COMMAND_GROUP_ACCENTS[known.group] : undefined);
+    const label = settings.label
+      ?? (known?.keycapId ? KEYCAP_LABELS[known.keycapId] : undefined)
+      ?? humanizeCommand(commandId, known?.title);
+
+    // Reuse the Micro artwork when the command happens to have some; otherwise set its name.
+    const image = known?.keycapId
+      ? await this.keycapImage(known.keycapId, theme, label, accent)
+      : renderCommandKey(label, theme, accent);
+    if (image) await this.setImage(action, image);
   }
 
   registerDial(kind: DialKind, action: DialAction): void {
@@ -476,7 +534,8 @@ export class DeckController {
       ...[...this.usageLimitActions.values()].map((registration) => this.renderUsageLimit(registration)),
       ...[...this.usageOverviewActions.values()].map((action) => this.renderUsageOverview(action)),
       ...[...this.rateLimitResetActions.values()].map((action) => this.renderRateLimitReset(action)),
-      ...[...this.dials.values()].map((registration) => this.renderDial(registration))
+      ...[...this.dials.values()].map((registration) => this.renderDial(registration)),
+      ...[...this.commandActions.values()].map((registration) => this.renderCommandAction(registration))
     ]);
   }
 

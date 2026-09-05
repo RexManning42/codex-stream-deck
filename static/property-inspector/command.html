@@ -1,0 +1,114 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Codex Command</title>
+  <style>
+    :root { color-scheme: dark; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+    body { margin: 0; padding: 14px; color: #d8d8d8; background: #2d2d2d; font-size: 12px; }
+    label { display: grid; grid-template-columns: 92px 1fr; align-items: center; gap: 8px; margin-bottom: 8px; }
+    select, input { width: 100%; min-height: 28px; color: #efefef; background: #3b3b3b; border: 1px solid #555; border-radius: 4px; padding: 3px 7px; box-sizing: border-box; }
+    select:disabled { opacity: .5; }
+    p { margin: 10px 0 0 100px; color: #a9a9a9; line-height: 1.35; }
+    p.warn { color: #ffb066; }
+  </style>
+</head>
+<body>
+  <label><span>Filter</span><input id="filter" type="search" placeholder="terminal, model, thread…" autocomplete="off"></label>
+  <label><span>Command</span><select id="command" disabled><option>Loading…</option></select></label>
+  <label><span>Label</span><input id="label" type="text" placeholder="(uses the command name)" autocomplete="off"></label>
+  <p id="hint">Runs a command from Codex's own registry. The list is read live from the app.</p>
+
+  <script>
+    let websocket, context, settings = {}, catalogue = [];
+
+    // Proven by invoking one: electron-only commands resolve but never handle, so the
+    // webview runner cannot reach them. Flag them rather than let a key silently fail.
+    const unreachable = (command) => command.kind === "electron-only";
+
+    const humanize = (command) => (command.title ?? command.id).split(".").pop()
+      .replace(/[-_]+/g, " ").replace(/([a-z\d])([A-Z])/g, "$1 $2")
+      .replace(/\s+/g, " ").trim().replace(/^./, (c) => c.toUpperCase());
+
+    function paint() {
+      const select = document.getElementById("command");
+      const needle = document.getElementById("filter").value.trim().toLowerCase();
+      const shown = catalogue.filter((c) => !needle || c.id.toLowerCase().includes(needle) || humanize(c).toLowerCase().includes(needle));
+      const groups = {};
+      for (const c of shown) (groups[c.group ?? "other"] ??= []).push(c);
+
+      select.innerHTML = "";
+      if (!shown.length) { select.innerHTML = "<option value=''>No match</option>"; select.disabled = true; return; }
+      select.disabled = false;
+      const blank = document.createElement("option");
+      blank.value = ""; blank.textContent = "— pick a command —";
+      select.append(blank);
+      for (const name of Object.keys(groups).sort()) {
+        const optgroup = document.createElement("optgroup");
+        optgroup.label = name;
+        for (const c of groups[name].sort((a, b) => humanize(a).localeCompare(humanize(b)))) {
+          const option = document.createElement("option");
+          option.value = c.id;
+          option.textContent = humanize(c) + (unreachable(c) ? "  (not reachable)" : "");
+          optgroup.append(option);
+        }
+        select.append(optgroup);
+      }
+      select.value = settings.commandId ?? "";
+      hint();
+    }
+
+    function hint() {
+      const chosen = catalogue.find((c) => c.id === (settings.commandId ?? ""));
+      const p = document.getElementById("hint");
+      if (chosen && unreachable(chosen)) {
+        p.className = "warn";
+        p.textContent = chosen.id + " is electron-only — the command runner cannot reach it. Use a Stream Deck hotkey action instead if it has a shortcut.";
+      } else if (chosen) {
+        p.className = "";
+        p.textContent = chosen.id + (chosen.keycapId ? "  ·  uses the " + chosen.keycapId + " artwork" : "");
+      } else {
+        p.className = "";
+        p.textContent = "Runs a command from Codex's own registry. The list is read live from the app.";
+      }
+    }
+
+    const save = () => websocket?.readyState === WebSocket.OPEN
+      && websocket.send(JSON.stringify({ event: "setSettings", context, payload: settings }));
+
+    window.connectElgatoStreamDeckSocket = (port, uuid, registerEvent, info, actionInfo) => {
+      const action = JSON.parse(actionInfo);
+      context = action.context;
+      settings = action.payload?.settings ?? {};
+      document.getElementById("label").value = settings.label ?? "";
+      websocket = new WebSocket(`ws://127.0.0.1:${port}`);
+      websocket.addEventListener("open", () => {
+        websocket.send(JSON.stringify({ event: registerEvent, uuid }));
+        websocket.send(JSON.stringify({ event: "sendToPlugin", context, action: action.action, payload: { request: "commands" } }));
+      });
+      websocket.addEventListener("message", (event) => {
+        const message = JSON.parse(event.data);
+        if (message.event !== "sendToPropertyInspector") return;
+        if (message.payload?.error) {
+          document.getElementById("hint").className = "warn";
+          document.getElementById("hint").textContent = "Could not read Codex's commands: " + message.payload.error;
+          return;
+        }
+        catalogue = message.payload?.commands ?? [];
+        paint();
+      });
+    };
+
+    document.getElementById("filter").addEventListener("input", paint);
+    document.getElementById("command").addEventListener("change", (event) => {
+      settings = { ...settings, commandId: event.target.value || undefined };
+      save(); hint();
+    });
+    document.getElementById("label").addEventListener("input", (event) => {
+      settings = { ...settings, label: event.target.value.trim() || undefined };
+      save();
+    });
+  </script>
+</body>
+</html>

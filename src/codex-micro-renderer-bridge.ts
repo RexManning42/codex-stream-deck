@@ -77,6 +77,91 @@ export function threadKeyIdentity(value: string | null | undefined): string {
   return text.match(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i)?.[0]?.toLowerCase() ?? text;
 }
 
+// Resolving Codex's command runner is identical whether the caller starts from a keycap
+// or from a bare command id, so both embed this. Defines `resolved` = { fn, detail }.
+const COMMAND_RUNNER_SOURCE = `
+        const CACHE = Symbol.for('codex-deck-command-runner');
+        const rejected = [];
+
+        // Validation never calls the candidate: a speculative call could fire an arbitrary
+        // command. Safety rests on provenance instead - the winner is the callee of a call
+        // Codex itself makes with (<command id>, 'codex_micro_hid'), reached through a
+        // static import binding.
+        const usable = (fn) => {
+          if (typeof fn !== 'function') return false;
+          if (fn.length < 2) return false;
+          const text = Function.prototype.toString.call(fn);
+          if (/^\\s*class[\\s{]/.test(text)) return false;
+          if (/\\{\\s*\\[native code\\]\\s*\\}/.test(text)) return false;
+          return true;
+        };
+
+        const resolveFrom = async (sourceUrl) => {
+          let text;
+          try { text = await (await fetch(sourceUrl)).text(); } catch { return null; }
+          let sites = collectRunnerCallSites(text, /^codex_micro_hid$/).filter(isRunnerCallSite);
+          if (!sites.length) sites = collectRunnerCallSites(text, /^codex_micro_[a-z_]+$/).filter(isRunnerCallSite);
+          if (!sites.length) return null;
+          const score = (name) => sites.filter((site) => site.callee === name)
+            .reduce((total, site) => total + (site.literalFirstArg ? 10 : 1), 0);
+          const ranked = [...new Set(sites.map((site) => site.callee))].sort((a, b) => score(b) - score(a));
+          const importPattern = /import\\s*\\{([^}]*)\\}\\s*from\\s*["']([^"']+)["']/g;
+          for (const callee of ranked) {
+            let found = null;
+            let sawBinding = false;
+            importPattern.lastIndex = 0;
+            for (let match = importPattern.exec(text); match && !found; match = importPattern.exec(text)) {
+              for (const specifier of match[1].split(',')) {
+                const parts = specifier.trim().split(/\\s+as\\s+/);
+                const exportName = parts[0];
+                const localName = parts[1] ?? parts[0];
+                if (localName !== callee) continue;
+                sawBinding = true;
+                const where = match[2].split('/').pop() + '#' + exportName;
+                let namespace = null;
+                try { namespace = await import(new URL(match[2], sourceUrl).href); } catch {}
+                const fn = namespace ? namespace[exportName] : null;
+                if (usable(fn)) found = { fn, detail: callee + ' -> ' + where };
+                else rejected.push(callee + ' (' + where + ' is ' + (typeof fn === 'function' ? 'arity ' + fn.length : String(fn === null ? 'unresolvable' : typeof fn)) + ')');
+                break;
+              }
+            }
+            if (found) return found;
+            if (!sawBinding) rejected.push(callee + ' (local function, no import binding)');
+          }
+          return null;
+        };
+
+        let resolved = globalThis[CACHE];
+        if (!resolved || resolved.url !== bridgeUrl) {
+          resolved = null;
+          const searched = [bridgeUrl, ...urls.filter((url) => url.includes('/assets/codex-micro-') && url !== bridgeUrl)];
+          for (const url of searched) {
+            if (!url) continue;
+            const hit = await resolveFrom(url);
+            if (hit) { resolved = { url: bridgeUrl, fn: hit.fn, detail: hit.detail }; break; }
+          }
+          // The module hash rotates on every Codex build, so this self-invalidates.
+          if (resolved) globalThis[CACHE] = resolved;
+        }
+        if (!resolved) {
+          throw new Error('Codex command runner not found in ' + (bridgeUrl ? bridgeUrl.split('/').pop() : 'the Codex bundle')
+            + '. Rejected: ' + (rejected.length ? rejected.join('; ') : 'no two-argument call sites') + '.');
+        }
+
+        // Single-shot: a throw may have left side effects, and a falsy result is Codex
+        // reporting no active handler, not a reason to try a different function.
+`;
+
+export type CodexCommand = {
+  id: string;
+  /** "webview" commands reach the runner; "electron-only" ones resolve but never handle. */
+  kind: string;
+  group: string | null;
+  title: string | null;
+  keycapId: string | null;
+};
+
 export type RunnerCallSite = {
   callee: string;
   argIndex: number;
@@ -499,6 +584,87 @@ export class CodexMicroRendererBridge {
     throw new Error("Codex received the task selection but did not activate the requested thread.");
   }
 
+  /** Runs any command in Codex's registry, not only the ~29 that have Micro keycap artwork. */
+  async runCommand(commandId: string): Promise<void> {
+    await this.ensureConnected();
+    const expression = `(async () => {
+      ${collectRunnerCallSites.toString()}
+      ${isRunnerCallSite.toString()}
+      const urls = [...new Set([
+        ...[...document.querySelectorAll('link[href], script[src]')].map((element) => element.href || element.src),
+        ...performance.getEntriesByType('resource').map((entry) => entry.name)
+      ])].filter((url) => url.includes('/assets/') && url.endsWith('.js'));
+      const bridgeUrl = urls.find((value) => value.includes('/assets/codex-micro-bridge-'));
+      ${COMMAND_RUNNER_SOURCE}
+      const handled = resolved.fn(${JSON.stringify(commandId)}, 'codex_micro_hid');
+      // Electron-only commands resolve but never handle: the webview runner cannot reach them.
+      if (!handled) throw new Error('This Codex command is not active in the current view.');
+      return { runner: resolved.detail };
+    })()`;
+    try {
+      const result = await this.evaluate<{ runner?: string }>(expression);
+      if (result?.runner && this.loggedRunner !== result.runner) {
+        this.loggedRunner = result.runner;
+        this.log(`Codex command runner resolved: ${result.runner}.`);
+      }
+    } catch (error) {
+      if (!(error instanceof RendererEvaluationError) || error.kind !== "page") this.disconnect();
+      throw error;
+    }
+  }
+
+  /** Codex's own command registry, read live so it follows app updates rather than a baked list. */
+  async listCommands(): Promise<CodexCommand[]> {
+    await this.ensureConnected();
+    const expression = `(async () => {
+      const urls = [...new Set([
+        ...[...document.querySelectorAll('link[href], script[src]')].map((element) => element.href || element.src),
+        ...performance.getEntriesByType('resource').map((entry) => entry.name)
+      ])].filter((url) => url.includes('/assets/') && url.endsWith('.js'));
+
+      // The registry is the largest exported array of objects carrying an id and a kind.
+      let registry = null;
+      for (const url of urls) {
+        let namespace;
+        try { namespace = await import(url); } catch { continue; }
+        for (const value of Object.values(namespace)) {
+          if (!Array.isArray(value) || value.length < 20) continue;
+          const first = value[0];
+          if (!first || typeof first !== 'object' || !('id' in first) || !('kind' in first)) continue;
+          if (!registry || value.length > registry.length) registry = value;
+        }
+      }
+      if (!registry) throw new Error('Codex command registry was not found.');
+
+      // Each Micro keycap names the command it runs, so existing artwork can be reused.
+      const keycapByCommand = {};
+      const layoutUrl = urls.find((value) => value.includes('/assets/codex-micro-layout-'));
+      if (layoutUrl) {
+        const layout = await import(layoutUrl);
+        const getter = Object.values(layout).find((candidate) => {
+          if (typeof candidate !== 'function') return false;
+          try { return candidate('FAST')?.id === 'FAST'; } catch { return false; }
+        });
+        if (getter) {
+          for (const id of ${JSON.stringify(OFFICIAL_KEYCAP_IDS)}) {
+            const keycap = getter(id);
+            const command = keycap?.action?.commandId ?? keycap?.action?.command;
+            if (keycap && keycap.id === id && command) keycapByCommand[command] = id;
+          }
+        }
+      }
+
+      return registry.map((command) => ({
+        id: command.id,
+        kind: command.kind,
+        group: command.commandMenuGroupKey ?? null,
+        title: command.titleIntlId ?? null,
+        keycapId: keycapByCommand[command.id] ?? null
+      }));
+    })()`;
+    return await this.evaluate<CodexCommand[]>(expression);
+  }
+
   async sendAction(slot: MicroActionSlot, act: 0 | 1): Promise<void> {
     const key = slot === "ACT10_ACT11" ? "ACT10" : slot;
     await this.dispatch("codex-micro-hid-event", { event: { key, act, slot: null, threadKey: null } }, "codex-micro-hid-event");
@@ -549,77 +715,7 @@ export class CodexMicroRendererBridge {
       if (!action) throw new Error('The selected Codex Micro keycap has no action.');
 
       if (action.type === 'command') {
-        const CACHE = Symbol.for('codex-deck-command-runner');
-        const rejected = [];
-
-        // Validation never calls the candidate: a speculative call could fire an arbitrary
-        // command. Safety rests on provenance instead - the winner is the callee of a call
-        // Codex itself makes with (<command id>, 'codex_micro_hid'), reached through a
-        // static import binding.
-        const usable = (fn) => {
-          if (typeof fn !== 'function') return false;
-          if (fn.length < 2) return false;
-          const text = Function.prototype.toString.call(fn);
-          if (/^\\s*class[\\s{]/.test(text)) return false;
-          if (/\\{\\s*\\[native code\\]\\s*\\}/.test(text)) return false;
-          return true;
-        };
-
-        const resolveFrom = async (sourceUrl) => {
-          let text;
-          try { text = await (await fetch(sourceUrl)).text(); } catch { return null; }
-          let sites = collectRunnerCallSites(text, /^codex_micro_hid$/).filter(isRunnerCallSite);
-          if (!sites.length) sites = collectRunnerCallSites(text, /^codex_micro_[a-z_]+$/).filter(isRunnerCallSite);
-          if (!sites.length) return null;
-          const score = (name) => sites.filter((site) => site.callee === name)
-            .reduce((total, site) => total + (site.literalFirstArg ? 10 : 1), 0);
-          const ranked = [...new Set(sites.map((site) => site.callee))].sort((a, b) => score(b) - score(a));
-          const importPattern = /import\\s*\\{([^}]*)\\}\\s*from\\s*["']([^"']+)["']/g;
-          for (const callee of ranked) {
-            let found = null;
-            let sawBinding = false;
-            importPattern.lastIndex = 0;
-            for (let match = importPattern.exec(text); match && !found; match = importPattern.exec(text)) {
-              for (const specifier of match[1].split(',')) {
-                const parts = specifier.trim().split(/\\s+as\\s+/);
-                const exportName = parts[0];
-                const localName = parts[1] ?? parts[0];
-                if (localName !== callee) continue;
-                sawBinding = true;
-                const where = match[2].split('/').pop() + '#' + exportName;
-                let namespace = null;
-                try { namespace = await import(new URL(match[2], sourceUrl).href); } catch {}
-                const fn = namespace ? namespace[exportName] : null;
-                if (usable(fn)) found = { fn, detail: callee + ' -> ' + where };
-                else rejected.push(callee + ' (' + where + ' is ' + (typeof fn === 'function' ? 'arity ' + fn.length : String(fn === null ? 'unresolvable' : typeof fn)) + ')');
-                break;
-              }
-            }
-            if (found) return found;
-            if (!sawBinding) rejected.push(callee + ' (local function, no import binding)');
-          }
-          return null;
-        };
-
-        let resolved = globalThis[CACHE];
-        if (!resolved || resolved.url !== bridgeUrl) {
-          resolved = null;
-          const searched = [bridgeUrl, ...urls.filter((url) => url.includes('/assets/codex-micro-') && url !== bridgeUrl)];
-          for (const url of searched) {
-            if (!url) continue;
-            const hit = await resolveFrom(url);
-            if (hit) { resolved = { url: bridgeUrl, fn: hit.fn, detail: hit.detail }; break; }
-          }
-          // The module hash rotates on every Codex build, so this self-invalidates.
-          if (resolved) globalThis[CACHE] = resolved;
-        }
-        if (!resolved) {
-          throw new Error('Codex command runner not found in ' + (bridgeUrl ? bridgeUrl.split('/').pop() : 'the Codex bundle')
-            + '. Rejected: ' + (rejected.length ? rejected.join('; ') : 'no two-argument call sites') + '.');
-        }
-
-        // Single-shot: a throw may have left side effects, and a falsy result is Codex
-        // reporting no active handler, not a reason to try a different function.
+        ${COMMAND_RUNNER_SOURCE}
         const handled = resolved.fn(action.command, 'codex_micro_hid');
         if (!handled) throw new Error('This Codex command is not active in the current view.');
         return { runner: resolved.detail };

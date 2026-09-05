@@ -447,6 +447,46 @@ export function renderFallbackKeycap(keycapId: string, theme: ThemeMode = "light
   </svg>`);
 }
 
+// Turns a command id or its intl title into something readable on a key:
+// "composer.openModelPicker" -> "Open Model Picker".
+export function humanizeCommand(id: string, title?: string | null): string {
+  const source = (title ?? id).split(".").pop() ?? id;
+  return source
+    .replace(/[-_]+/g, " ")
+    .replace(/([a-z\d])([A-Z])/g, "$1 $2")
+    .replace(/\s+/g, " ")
+    .trim()
+    .replace(/^./, (character) => character.toUpperCase());
+}
+
+/**
+ * Key for a command that has no Micro keycap artwork. Most of Codex's registry has none,
+ * so rather than leave those unusable this draws the same chassis with the command's name
+ * set across up to two lines.
+ */
+export function renderCommandKey(label: string, theme: ThemeMode = "dark", accent?: KeyGroup): string {
+  const surface = SURFACES[theme];
+  const chassis = keycapChassis(theme, accent);
+  const [line1, line2] = splitTitle(label);
+  const body = line2
+    ? `<text x="72" y="66" text-anchor="middle" font-size="${fitTitleFont(line1, 19)}" font-weight="650" letter-spacing=".1" fill="${chassis.ink}">${escapeXml(line1)}</text>`
+      + `<text x="72" y="90" text-anchor="middle" font-size="${fitTitleFont(line2, 19)}" font-weight="650" letter-spacing=".1" fill="${chassis.ink}">${escapeXml(line2)}</text>`
+    : `<text x="72" y="80" text-anchor="middle" font-size="${fitTitleFont(line1, 22)}" font-weight="650" letter-spacing=".1" fill="${chassis.ink}">${escapeXml(line1)}</text>`;
+
+  return toDataUrl(`<svg xmlns="http://www.w3.org/2000/svg" width="144" height="144" viewBox="0 0 144 144">
+    <defs>${chassis.defs}</defs>
+    ${chassis.layers}
+    <g data-icon-source="command-label" font-family="${KEY_LABEL_FONT}">${body}</g>
+  </svg>`);
+}
+
+// Codex groups its own commands for its command menu; reuse that grouping for key colour
+// instead of inventing a second taxonomy.
+export const COMMAND_GROUP_ACCENTS: Record<string, KeyGroup> = {
+  navigation: "nav", panels: "nav", thread: "compose",
+  workspace: "vcs", app: "manage", configure: "manage", skills: "manage"
+};
+
 export function renderHostTargetKey(label: "WIN" | "MAC", health: HostHealthState, theme: ThemeMode = "dark"): string {
   const surface = SURFACES[theme];
   const signal = health === "ready" ? "#35D86B" : health === "degraded" ? SIGNAL_COLORS[theme].input

@@ -193,3 +193,43 @@ test("strip segments are valid standalone SVG and stay off pure black", async ()
     }
   }
 });
+
+test("command names are humanised for a key", async () => {
+  const { humanizeCommand } = await import("../src/render.js");
+  assert.equal(humanizeCommand("composer.openModelPicker"), "Open Model Picker");
+  assert.equal(humanizeCommand("searchChats"), "Search Chats");
+  assert.equal(humanizeCommand("git.createPullRequest"), "Create Pull Request");
+  // The intl title is preferred, because switchToMode1 says nothing about what it does.
+  assert.equal(humanizeCommand("switchToMode1", "codex.command.switchToChat"), "Switch To Chat");
+  assert.equal(humanizeCommand("newTask"), "New Task");
+});
+
+test("commands without keycap artwork still render a usable key", async () => {
+  const { renderCommandKey, COMMAND_GROUP_ACCENTS } = await import("../src/render.js");
+  const decode = (url: string) => decodeURIComponent(url.replace(/^data:image\/svg\+xml;charset=utf8,/, ""));
+
+  const svg = decode(renderCommandKey("Open Model Picker", "dark", "compose"));
+  assert.match(svg, /data-icon-source="command-label"/);
+  assert.match(svg, /Open Model/, "a long name wraps rather than overflowing");
+  assert.match(svg, /data-key-group="compose"/);
+  assert.doesNotMatch(svg, /#000(?:000)?\b/i);
+
+  // Codex's own menu grouping drives the colour, so there is no second taxonomy to drift.
+  for (const group of Object.values(COMMAND_GROUP_ACCENTS)) {
+    assert.ok(["nav", "compose", "affirm", "deny", "run", "vcs", "manage"].includes(group));
+  }
+  assert.doesNotMatch(decode(renderCommandKey("Settings", "light")), /#000(?:000)?\b/i);
+});
+
+test("generic commands never cross the relay", async () => {
+  // The relay validates a closed command set -- `keycap` only accepts OFFICIAL_KEYCAP_IDS.
+  // Carrying an arbitrary command id over it would let a paired host invoke anything in
+  // Codex's registry, archiveThread and git.mergePullRequest included.
+  const [controller, protocol] = await Promise.all([
+    readFile(new URL("../src/controller.ts", import.meta.url), "utf8"),
+    readFile(new URL("../src/relay-protocol.ts", import.meta.url), "utf8")
+  ]);
+  assert.match(controller, /if \(this\.isRemoteTarget\(\)\) \{\s*\n\s*throw new Error\("Commands run on the local computer only/);
+  assert.doesNotMatch(protocol, /kind: "command"/, "the relay command union must stay closed");
+  assert.doesNotMatch(protocol, /value\.kind === "command"/);
+});
